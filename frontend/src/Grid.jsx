@@ -1,6 +1,17 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, fmt, pm, mlabel, ymd } from './util.js'
 
+function GridIcon({ name }) {
+  const paths = {
+    undo: 'M9 5 4 10l5 5M4 10h9a6 6 0 0 1 6 6',
+    redo: 'm15 5 5 5-5 5m5-5h-9a6 6 0 0 0-6 6',
+    archive: 'M4 4h16v4H4zM6 8v12h12V8M10 12h4',
+    restore: 'M4 4h16v4H4zM6 8v12h12V8m-3 6-3-3-3 3m3-3v6',
+    delete: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7'
+  }
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>
+}
+
 function AutoText({ value, onChange, label, disabled, placeholder, cls }) {
   const r = useRef(null)
   useLayoutEffect(() => { const e = r.current; if (e) { e.style.height = 'auto'; e.style.height = Math.min(e.scrollHeight, 160) + 'px' } }, [value])
@@ -65,6 +76,7 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
   const txt = (a, f, ph) => <td className={'txt ' + (pending[`f:${a.id}:${f}`] ? 'dirty' : '')}><AutoText label={`${f}-${a.id}`} value={pf(a, f)} placeholder={ph} disabled={!!a.archived} onChange={v => onField(a, f, v)} /></td>
   const infoRow = (kind, label) => <tr className="inp"><td className="lab stl" colSpan={2}>{label}</td><td colSpan={5} />
     {P.map(p => { const k = `i:${kind}:${p.id}`, old = (T.info[p.id] || {})[kind] || 0; return <td key={p.id} className={`n info ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''}`}><input inputMode="decimal" aria-label={`${kind}-${p.id}`} value={pending[k] ? pending[k].raw : fmt(old)} onChange={e => edit(k, { type: 'info', kind, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr>
+  const actionsLocked = busy || loading || historyDisabled
   const hasMonthPartial = Object.values(T.month_complete).some(x => !x)
   const historyKeys = e => {
     if (!e.target.closest('table') || !(e.ctrlKey || e.metaKey) || e.altKey) return
@@ -75,10 +87,13 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
     if (key === 'y' || e.shiftKey) redo(); else undo()
   }
   return <div className="gridtab" onKeyDownCapture={historyKeys}>
-    <div className="row">
-      <button title="Undo last unsaved grid edit (Ctrl+Z)" disabled={!canUndo || historyDisabled || loading || busy} onClick={undo}>Undo</button>
-      <button title="Redo grid edit (Ctrl+Y or Ctrl+Shift+Z)" disabled={!canRedo || historyDisabled || loading || busy} onClick={redo}>Redo</button>
-      <small>Unsaved edits · Ctrl+Z / Ctrl+Y · Tab: next cell · Enter: next row</small>
+    <div className="grid-toolbar" role="toolbar" aria-label="Grid editing">
+      <div className="history-buttons">
+        <button aria-label="Undo" title="Undo last unsaved grid edit (Ctrl+Z)" disabled={!canUndo || historyDisabled || loading || busy} onClick={undo}><GridIcon name="undo" /><span>Undo</span></button>
+        <button aria-label="Redo" title="Redo grid edit (Ctrl+Y or Ctrl+Shift+Z)" disabled={!canRedo || historyDisabled || loading || busy} onClick={redo}><GridIcon name="redo" /><span>Redo</span></button>
+      </div>
+      <span className="grid-help">Tab to move · Enter for next row</span>
+      <span className="draft-status">{Object.keys(pending).length ? `${Object.keys(pending).length} unsaved change(s)` : 'All changes saved'}</span>
     </div>
     <details className="mission"><summary><b>Mission</b> {t.work_package || <i>no work package</i>} · start {t.start_date} · end {t.end_date || 'open (continues automatically)'} <span className="chip">Saved total: {fmt(T.bounds.all_total) || 0} days</span></summary>
       {mgr ? <div className="meta"><div><label>Work package</label><input aria-label="Work package" size={34} value={meta.work_package} onChange={e => setMeta({ ...meta, work_package: e.target.value })} /></div>
@@ -88,14 +103,20 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
         <p className="hint">Mission dates do not change the period you are looking at, and never delete entries.</p></div> : <p className="hint">Dates are set by your manager.</p>}</details>
     <div className="legend"><span className="lg in">Input</span><span className="lg dirty">Changed, not saved</span><span className="lg calc">Calculated total</span><span className="lg off">Not editable</span><span className="lg b-c">Completed</span><span className="lg b-w">WIP</span></div>
     <div className={'wrap' + (loading ? ' loading' : '')} ref={wrapRef} onBlurCapture={endEdit}><table><thead>
-      <tr><th className="s1" rowSpan={3}>Activity details</th><th className="s2" rowSpan={3}>Status</th><th rowSpan={3}>Affected projects</th><th rowSpan={3}>Deliverables / Functions</th><th rowSpan={3}>Estimation</th><th rowSpan={3}>Project Progress in %</th><th rowSpan={3} />{G.map(g => <th key={g.k} colSpan={g.n}><span className="mh">{mlabel(g.k)}</span></th>)}</tr>
+      <tr><th className="s1" rowSpan={3}>Activity details</th><th className="s2" rowSpan={3}>Status</th><th rowSpan={3}>Affected projects</th><th rowSpan={3}>Deliverables / Functions</th><th rowSpan={3}>Estimation</th><th rowSpan={3}>Project Progress in %</th><th className="actions-heading" rowSpan={3}>Actions</th>{G.map(g => <th key={g.k} colSpan={g.n}><span className="mh">{mlabel(g.k)}</span></th>)}</tr>
       <tr>{P.map(p => <th key={p.id} className={p.start <= iso && iso <= p.end ? 'cur' : ''} title={`${p.start} → ${p.end}`}>WEEK{p.iso_week}</th>)}</tr><tr>{P.map(p => <th key={p.id}>{p.capacity} day{p.capacity > 1 ? 's' : ''}</th>)}</tr></thead>
-      <tbody>{T.activities.map((a, ri) => { const st = pf(a, 'status'); return <tr key={a.id} className={a.archived ? 'arch' : st === 'Completed' ? 'done' : 'wip'}>
+      <tbody>{T.activities.map((a, ri) => { const st = pf(a, 'status'), rowDirty = Object.values(pending).some(q => q.activity_id === a.id); return <tr key={a.id} className={a.archived ? 'arch' : st === 'Completed' ? 'done' : 'wip'}>
         <td className={`s1 ${pending[`f:${a.id}:details`] ? 'dirty' : ''}`}><AutoText label={`details-${a.id}`} placeholder="Activity details" value={pf(a, 'details')} disabled={!!a.archived} onChange={v => onField(a, 'details', v)} /></td>
         <td className={`s2 ${pending[`f:${a.id}:status`] ? 'dirty' : ''}`}>{a.archived ? <span className="badge arch">Archived</span> : <select aria-label={`status-${a.id}`} value={st} onChange={e => onField(a, 'status', e.target.value)}><option>WIP</option><option>Completed</option></select>}</td>
         {txt(a, 'affected')}{txt(a, 'deliverables')}{txt(a, 'estimation')}<td className={`n ${pending[`f:${a.id}:progress`] ? 'dirty' : ''}`}><input aria-label={`progress-${a.id}`} style={{ width: 60 }} value={pf(a, 'progress')} disabled={!!a.archived} onChange={e => onField(a, 'progress', e.target.value)} /></td>
-        <td><button disabled={busy} onClick={() => run(async () => { if (!a.archived && !confirm('Archive this activity? Its days stay in all totals.')) return; await api(`/activities/${a.id}/archive`, { method: 'POST', body: { archived: !a.archived } }); await reload() })}>{a.archived ? 'Restore' : 'Archive'}</button>
-          {!a.has_data && <button disabled={busy} style={{ color: '#c62828' }} title="Only possible while no day is saved on this activity" onClick={() => run(async () => { if (!confirm('Delete this empty activity permanently? This cannot be undone.')) return; await api(`/activities/${a.id}`, { method: 'DELETE' }); dropPending(a.id); setMsg('Activity deleted.'); setErr(''); await reload() })}>Delete</button>}</td>
+        <td className="action-cell"><div className="activity-actions">
+          <button className="icon-action" aria-label={a.archived ? 'Restore' : 'Archive'} disabled={actionsLocked || rowDirty}
+            title={rowDirty ? 'Save or discard changes to this activity first' : a.archived ? 'Restore editing for this activity' : 'Archive: stop editing, keep all saved days and totals'}
+            onClick={() => run(async () => { if (!a.archived && !confirm('Archive this activity? It becomes read-only. All saved days and totals are kept. You can restore it later.')) return; await api(`/activities/${a.id}/archive`, { method: 'POST', body: { archived: !a.archived } }); setMsg(a.archived ? 'Activity restored. Editing is available again.' : 'Activity archived. Saved days and totals are kept.'); setErr(''); await reload() })}><GridIcon name={a.archived ? 'restore' : 'archive'} /></button>
+          {!a.has_data && <button className="icon-action danger" aria-label="Delete" disabled={actionsLocked || rowDirty}
+            title={rowDirty ? 'Save or discard changes to this activity first' : 'Delete permanently: only activities without saved days'}
+            onClick={() => run(async () => { if (!confirm('Delete this empty activity permanently? This cannot be undone.')) return; await api(`/activities/${a.id}`, { method: 'DELETE' }); dropPending(a.id); setMsg('Activity deleted.'); setErr(''); await reload() })}><GridIcon name="delete" /></button>}
+        </div></td>
         {P.map((p, ci) => { const k = `c:${a.id}:${p.id}`, old = (T.entries[a.id] || {})[p.id] || 0, off = a.archived || (outside(p) && !old)
           return <td key={p.id} className={`n wk ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''} ${off ? 'off' : ''} ${outside(p) ? 'out' : ''}`}><input inputMode="decimal" data-r={ri} data-c={ci} onKeyDown={e => nav(e, ri, ci)} onPaste={e => paste(e, ri, ci)} aria-label={`days-${a.id}-${p.id}`} value={eff(a.id, p.id)} disabled={off} onChange={e => edit(k, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr> })}</tbody>
       <tfoot>{infoRow('leave', 'Leave / Holidays (info only) :')}{infoRow('ph', 'PH holidays (info only) :')}
