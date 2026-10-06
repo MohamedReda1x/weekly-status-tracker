@@ -38,3 +38,4 @@ tfoot td input{padding:4px 6px}tfoot td.lab{text-align:right}.stl{position:stick
 table.plain td,table.plain th{padding:6px 10px;background:#fff;text-align:left;white-space:normal}table.plain th{background:#dde6f0;position:sticky;top:0}.acts button{margin-right:4px}.inline{background:#f7f9fc!important}.empty{text-align:center;padding:40px 20px}
 .mobile .card.act{margin-bottom:8px}.mrow{display:flex;justify-content:space-between;padding:3px 0}.card.act.done{border-left:4px solid var(--ok)}.card.act.wip{border-left:4px solid var(--wip)}
 @media(max-width:800px){.app{height:auto;min-height:100%}main{overflow:visible}header{position:static}.picker select{max-width:150px}.period{width:100%}nav{overflow-x:auto}.modal .card{width:94vw}}
+.gridtab td.wk:focus-within{position:relative;z-index:2;outline:2px solid var(--pri);outline-offset:-2px}

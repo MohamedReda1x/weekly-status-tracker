@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, fmt, mlabel, ymd } from './util.js'
+import { api, fmt, pm, mlabel, ymd } from './util.js'
 
 function AutoText({ value, onChange, label, disabled, placeholder, cls }) {
   const r = useRef(null)
@@ -7,7 +7,7 @@ function AutoText({ value, onChange, label, disabled, placeholder, cls }) {
   return <textarea ref={r} rows={1} aria-label={label} className={cls} value={value} placeholder={placeholder} disabled={disabled} onChange={e => onChange(e.target.value)} />
 }
 
-export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, setMsg, sel, loading, reload, dropPending }) {
+export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, setMsg, sel, loading, reload, dropPending, editBatch, endEdit, undo, redo, canUndo, canRedo, historyDisabled }) {
   const t = T.tracker, P = T.periods, G = []
   P.forEach(p => { const g = G[G.length - 1]; if (g && g.k === p.month_key) g.n++; else G.push({ k: p.month_key, n: 1 }) })
   const [meta, setMeta] = useState({ work_package: t.work_package, start_date: t.start_date, end_date: t.end_date || '' }), [busy, setBusy] = useState(false)
@@ -15,12 +15,47 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
   const wrapRef = useRef(null), iso = ymd(new Date())
   useEffect(() => { const w = wrapRef.current, th = w && w.querySelector('th.cur'); if (th) w.scrollLeft = Math.max(0, th.offsetLeft - 420) }, [t.id, T.range.from])
   const run = async fn => { if (busy) return; setBusy(true); try { await fn() } catch (e) { setErr(e.message) } finally { setBusy(false) } }
-  const nav = (e, ri, ci) => { const d = { ArrowDown: 1, Enter: 1, ArrowUp: -1 }[e.key]; if (!d) return; e.preventDefault(); const n = document.querySelector(`input[data-r="${ri + d}"][data-c="${ci}"]:not(:disabled)`); if (n) { n.focus(); n.select() } }
+  const nav = (e, ri, ci) => {
+    if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return
+    let next
+    if (e.key === 'Tab') {
+      const cells = [...wrapRef.current.querySelectorAll('input[data-r]:not(:disabled)')]
+      next = cells[cells.indexOf(e.currentTarget) + (e.shiftKey ? -1 : 1)]
+      if (!next) return // Allow Tab to leave the grid at its boundaries.
+    } else {
+      const step = e.key === 'Enter' ? (e.shiftKey ? -1 : 1) : { ArrowDown: 1, ArrowUp: -1 }[e.key]
+      if (!step) return
+      for (let row = ri + step; row >= 0 && row < T.activities.length; row += step) {
+        next = wrapRef.current.querySelector(`input[data-r="${row}"][data-c="${ci}"]:not(:disabled)`)
+        if (next) break
+      }
+    }
+    e.preventDefault()
+    if (next) { next.focus(); next.select() }
+  }
   const paste = (e, ri, ci) => {
-    const tx = e.clipboardData.getData('text'); if (!/[\t\n]/.test(tx.trim())) return; e.preventDefault()
-    tx.replace(/\r/g, '').replace(/\n$/, '').split('\n').forEach((line, dr) => line.split('\t').forEach((v, dc) => { const a = T.activities[ri + dr], p = P[ci + dc]; if (!a || !p || a.archived) return
-      const old = (T.entries[a.id] || {})[p.id] || 0; if (outside(p) && !old) return
-      edit(`c:${a.id}:${p.id}`, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw: v.trim() }) }))
+    e.preventDefault()
+    if (historyDisabled || loading || busy) return
+    const tx = e.clipboardData.getData('text')
+    const edits = [], invalid = []
+    let ignored = 0
+    tx.replace(/\r/g, '').replace(/\n$/, '').split('\n').forEach((line, dr) => line.split('\t').forEach((v, dc) => {
+      const a = T.activities[ri + dr], p = P[ci + dc]
+      if (!a || !p || a.archived) { ignored++; return }
+      const old = (T.entries[a.id] || {})[p.id] || 0
+      if (outside(p) && !old) { ignored++; return }
+      const raw = v.trim(), value = pm(raw)
+      if (value === null || value > 1000000) { invalid.push(`row ${dr + 1}, column ${dc + 1}`); return }
+      edits.push([`c:${a.id}:${p.id}`, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw }])
+    }))
+    if (invalid.length) {
+      setMsg('')
+      setErr(`Paste cancelled: ${invalid.length} invalid value(s) (${invalid.slice(0, 3).join('; ')}). Use 0–1000 days, a point or comma, and at most 3 decimals. No cell was changed.`)
+      return
+    }
+    if (edits.length) editBatch(edits)
+    setErr('')
+    setMsg(`Pasted ${edits.length} cell(s).${ignored ? ` ${ignored} cell(s) ignored: read-only or outside the displayed grid.` : ''}${edits.length ? ' Ctrl+Z undoes this paste.' : ''}`)
   }
   const outside = p => p.end < t.start_date || (t.end_date && p.start > t.end_date)
   const pf = (a, f) => pending[`f:${a.id}:${f}`] ? pending[`f:${a.id}:${f}`].raw : a[f]
@@ -31,7 +66,20 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
   const infoRow = (kind, label) => <tr className="inp"><td className="lab stl" colSpan={2}>{label}</td><td colSpan={5} />
     {P.map(p => { const k = `i:${kind}:${p.id}`, old = (T.info[p.id] || {})[kind] || 0; return <td key={p.id} className={`n info ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''}`}><input inputMode="decimal" aria-label={`${kind}-${p.id}`} value={pending[k] ? pending[k].raw : fmt(old)} onChange={e => edit(k, { type: 'info', kind, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr>
   const hasMonthPartial = Object.values(T.month_complete).some(x => !x)
-  return <div className="gridtab">
+  const historyKeys = e => {
+    if (!e.target.closest('table') || !(e.ctrlKey || e.metaKey) || e.altKey) return
+    const key = e.key.toLowerCase()
+    if (key !== 'z' && key !== 'y') return
+    e.preventDefault()
+    if (historyDisabled || loading || busy) return
+    if (key === 'y' || e.shiftKey) redo(); else undo()
+  }
+  return <div className="gridtab" onKeyDownCapture={historyKeys}>
+    <div className="row">
+      <button title="Undo last unsaved grid edit (Ctrl+Z)" disabled={!canUndo || historyDisabled || loading || busy} onClick={undo}>Undo</button>
+      <button title="Redo grid edit (Ctrl+Y or Ctrl+Shift+Z)" disabled={!canRedo || historyDisabled || loading || busy} onClick={redo}>Redo</button>
+      <small>Unsaved edits · Ctrl+Z / Ctrl+Y · Tab: next cell · Enter: next row</small>
+    </div>
     <details className="mission"><summary><b>Mission</b> {t.work_package || <i>no work package</i>} · start {t.start_date} · end {t.end_date || 'open (continues automatically)'} <span className="chip">Saved total: {fmt(T.bounds.all_total) || 0} days</span></summary>
       {mgr ? <div className="meta"><div><label>Work package</label><input aria-label="Work package" size={34} value={meta.work_package} onChange={e => setMeta({ ...meta, work_package: e.target.value })} /></div>
         <div><label>Mission start</label><input aria-label="Start date" type="date" value={meta.start_date} onChange={e => setMeta({ ...meta, start_date: e.target.value })} /></div>
@@ -39,7 +87,7 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
         <div><label>&nbsp;</label><button disabled={busy} onClick={() => run(async () => { await api('/trackers/' + sel, { method: 'PUT', body: { work_package: meta.work_package, start_date: meta.start_date, end_date: meta.end_date || null } }); setMsg('Mission updated. No saved day was removed.'); setErr(''); await reload() })}>Update mission</button></div>
         <p className="hint">Mission dates do not change the period you are looking at, and never delete entries.</p></div> : <p className="hint">Dates are set by your manager.</p>}</details>
     <div className="legend"><span className="lg in">Input</span><span className="lg dirty">Changed, not saved</span><span className="lg calc">Calculated total</span><span className="lg off">Not editable</span><span className="lg b-c">Completed</span><span className="lg b-w">WIP</span></div>
-    <div className={'wrap' + (loading ? ' loading' : '')} ref={wrapRef}><table><thead>
+    <div className={'wrap' + (loading ? ' loading' : '')} ref={wrapRef} onBlurCapture={endEdit}><table><thead>
       <tr><th className="s1" rowSpan={3}>Activity details</th><th className="s2" rowSpan={3}>Status</th><th rowSpan={3}>Affected projects</th><th rowSpan={3}>Deliverables / Functions</th><th rowSpan={3}>Estimation</th><th rowSpan={3}>Project Progress in %</th><th rowSpan={3} />{G.map(g => <th key={g.k} colSpan={g.n}><span className="mh">{mlabel(g.k)}</span></th>)}</tr>
       <tr>{P.map(p => <th key={p.id} className={p.start <= iso && iso <= p.end ? 'cur' : ''} title={`${p.start} → ${p.end}`}>WEEK{p.iso_week}</th>)}</tr><tr>{P.map(p => <th key={p.id}>{p.capacity} day{p.capacity > 1 ? 's' : ''}</th>)}</tr></thead>
       <tbody>{T.activities.map((a, ri) => { const st = pf(a, 'status'); return <tr key={a.id} className={a.archived ? 'arch' : st === 'Completed' ? 'done' : 'wip'}>

@@ -3,6 +3,7 @@ import { api, pm, mlabel, viewRange, shiftAnchor, viewLabel, todayAnchor, monthS
 import { Err, Ok, PwInput } from './ui.jsx'
 import Grid, { MobileList } from './Grid.jsx'
 import BL from './BL.jsx'
+import useDraftHistory from './useDraftHistory.js'
 import Panels from './Panels.jsx'
 import Accounts from './Accounts.jsx'
 
@@ -56,7 +57,8 @@ function Shell({ me, onOut }) {
   const mgr = me.role === 'admin', narrow = useNarrow()
   const [tab, setTab] = useState('grid'), [users, setUsers] = useState(null), [sel, setSel] = useState(mgr ? null : me.tracker_id), [T, setT] = useState(null), [loading, setLoading] = useState(true)
   const [view, setView] = useState({ mode: 'month', anchor: todayAnchor(), from: '', to: '' })
-  const [pending, setPending] = useState({}), [conf, setConf] = useState({}), [msg, setMsg] = useState(''), [err, setErr] = useState(''), [saving, setSaving] = useState(false), [comment, setComment] = useState('')
+  const { pending, setPending, changePending, endGroup, undo, redo, canUndo, canRedo } = useDraftHistory()
+  const [conf, setConf] = useState({}), [msg, setMsg] = useState(''), [err, setErr] = useState(''), [saving, setSaving] = useState(false), [comment, setComment] = useState('')
   const [dlg, setDlg] = useState(null), [exp, setExp] = useState(null), [loadFail, setLoadFail] = useState(null)
   const savingRef = useRef(false), dirty = Object.keys(pending).length > 0, n = Object.keys(pending).length
   const range = viewRange(view)
@@ -83,7 +85,9 @@ function Shell({ me, onOut }) {
   const colTotal = pid => { let t = T.col_totals[pid] || 0; for (const q of Object.values(pending)) if (q.type === 'cell' && q.pid === pid) { const x = pm(q.raw); if (x !== null) t += x - q.old } return t }
   const over = T ? T.periods.filter(p => colTotal(p.id) > p.capacity * 1000).map(p => `WEEK${p.iso_week} (${mlabel(p.month_key)}): ${colTotal(p.id) / 1000} > ${p.capacity}`) : []
   const bad = Object.values(pending).filter(q => q.type !== 'field' && pm(q.raw) === null).length
-  const edit = (k, obj, orig) => setPending(P => { const x = { ...P }; const same = obj.type === 'field' ? String(obj.raw) === String(orig) : pm(obj.raw) === obj.old; if (same) delete x[k]; else x[k] = obj; return x })
+  const applyEdit = (P, [k, obj, orig]) => { const x = { ...P }; const same = obj.type === 'field' ? String(obj.raw) === String(orig) : pm(obj.raw) === obj.old; if (same) delete x[k]; else x[k] = obj; return x }
+  const edit = (k, obj, orig) => changePending(P => applyEdit(P, [k, obj, orig]), k)
+  const editBatch = edits => changePending(P => edits.reduce(applyEdit, P))
 
   const save = async () => {   // returns true only when the batch was saved (used by "Save and export")
     if (savingRef.current) return false; savingRef.current = true; setSaving(true)
@@ -142,7 +146,7 @@ function Shell({ me, onOut }) {
       {tab === 'acc' && mgr && <Accounts me={me} users={users || []} refresh={refreshUsers} setErr={setErr} setMsg={setMsg} />}
       {tab !== 'acc' && empty && <div className="card empty"><h2>No employee yet</h2><p>Create an account for each team member. Each employee gets one tracker and sees only their own.</p><button className="p" onClick={() => setTab('acc')}>Create employee</button></div>}
       {tab !== 'acc' && !empty && !T && !loading && !err && <div className="card empty"><h2>No tracker available</h2><p>{mgr ? 'Select an employee above.' : 'Ask your manager to check your account.'}</p></div>}
-      {T && !empty && tab === 'grid' && (narrow ? <MobileList T={T} /> : <Grid {...{ T, pending, conf, edit, mgr, colTotal, setErr, setMsg, sel, loading, reload: () => load(sel, view, true), dropPending: aid => setPending(P => Object.fromEntries(Object.entries(P).filter(([, q]) => q.activity_id !== aid))), onMission: () => load(sel, view, true) }} />)}
+      {T && !empty && tab === 'grid' && (narrow ? <MobileList T={T} /> : <Grid {...{ T, pending, conf, edit, editBatch, endEdit: endGroup, undo, redo, canUndo, canRedo, historyDisabled: saving || !!dlg || !!exp, mgr, colTotal, setErr, setMsg, sel, loading, reload: () => load(sel, view, true), dropPending: aid => setPending(P => Object.fromEntries(Object.entries(P).filter(([, q]) => q.activity_id !== aid))), onMission: () => load(sel, view, true) }} />)}
       {T && !empty && tab === 'bl' && <BL T={T} label={viewLabel(view, range)} />}
       {T && !empty && tab === 'activity' && <Panels T={T} tid={sel} mgr={mgr} range={range} reload={() => load(sel, view, true)} setErr={setErr} setMsg={setMsg} />}
     </main>
