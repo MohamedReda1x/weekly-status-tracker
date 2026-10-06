@@ -39,10 +39,10 @@ describe('manager and employee journeys', () => {
     click('Show New password'); expect(f.type).toBe('text'); click('Save password'); await screen.findByText('Password saved.')
     window.location.hash = '#/'; await signOut()
   })
-  it('employee: decimals, capacity block, save with automatic week scope, archive, BL, keyboard/paste, conflict', async () => {
+  it('employee: decimals, capacity block, current-week comment, archive, hidden BL, keyboard/paste, conflict', async () => {
     render(<App />); await signIn('alice@gmail.com', 'Employee-pw-1')
     expect((await screen.findAllByText('Alice')).length).toBeGreaterThan(0); expect(screen.queryByLabelText('Employee')).toBeNull(); expect(screen.queryByRole('button', { name: 'Accounts' })).toBeNull()
-    expect(screen.queryByText(/Client/)).toBeNull(); expect((await screen.findAllByText('Estimation')).length).toBeGreaterThan(0)
+    expect(await screen.findByLabelText('Employee affiliation')).toBeTruthy(); expect((await screen.findAllByText('Alstom Estimation')).length).toBeGreaterThan(0)
     // an activity added by mistake can be deleted while it has no saved day
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
     await screen.findByText('Activity deleted.'); await waitFor(() => expect(screen.queryAllByLabelText(/^details-/).length).toBe(0))
@@ -52,7 +52,7 @@ describe('manager and employee journeys', () => {
     const [a, b] = freeInputs(), pid = a.getAttribute('aria-label').split('-')[2], cap = T.periods.find(p => p.id == pid).capacity
     type(a, String(cap + 1)); await screen.findByText(/Capacity exceeded/); expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(true)
     type(a, '0,5'); type(b, '1.25'); await screen.findByText(/Comment will be linked to: WEEK\d+\/\d{4}/)
-    type(screen.getByLabelText('Summary of changes'), 'Review in progress')
+    type(screen.getByLabelText('Current week commentary'), 'Review in progress')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(false)); click('Save'); await screen.findByText(/Saved 3 changes/)
     expect(screen.getByTestId('ct-' + pid).textContent).toBe('0.5')
     fireEvent.click(screen.getByRole('button', { name: 'Comments & history' })); await screen.findByText('Review in progress')
@@ -62,8 +62,7 @@ describe('manager and employee journeys', () => {
     click('Archive'); await screen.findByText('Archived'); expect(mt()).toBe(before)
     click('Restore'); await waitFor(() => expect(screen.queryByText('Archived')).toBeNull())
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()      // days are saved on this activity: archive only
-    fireEvent.click(screen.getByRole('button', { name: 'Monthly BL' })); expect(Number((await screen.findAllByTestId(/^bl-/))[0].textContent)).toBe(before)
-    fireEvent.click(screen.getByRole('button', { name: 'Tracker' }))
+    expect(screen.queryByRole('button', { name: 'Monthly BL' })).toBeNull()
     // keyboard + Excel paste
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); await waitFor(() => expect(screen.getAllByLabelText(/^details-/).length).toBe(2))
     const f0 = freeInputs()[0], c0 = +f0.dataset.c, cell = (r, c) => document.querySelector(`input[data-r="${r}"][data-c="${c}"]`)

@@ -169,8 +169,10 @@ def logout(req: Request, resp: Response):
 @app.get("/api/me")
 def me(req: Request):
     u = cur_user(req)
-    with db() as c: t = c.execute("SELECT id FROM trackers WHERE owner_id=?", (u["id"],)).fetchone()
-    return {"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "tracker_id": t["id"] if t else None, "must_change_password": bool(u["must_change_password"]),
+    with db() as c:
+        t = c.execute("SELECT id FROM trackers WHERE owner_id=?", (u["id"],)).fetchone()
+        aff = affiliation(c, u["id"])
+    return {**aff, "id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"], "tracker_id": t["id"] if t else None, "must_change_password": bool(u["must_change_password"]),
             "email_test_mode": E("EMAIL_MODE", "console") != "resend"}
 
 def send_mail(c, user, kind):
@@ -227,14 +229,20 @@ def change_password(b: ChangePw, req: Request):
     return {"ok": True}
 
 # ---------- accounts (admin) ----------
-class NewUser(BaseModel): email: str; name: str; mode: str = "invite"; temp_password: str | None = None
+class NewUser(BaseModel):
+    email: str; name: str; mode: str = "invite"; temp_password: str | None = None
+    trade_id: int | None = None
+    professional_role_id: int | None = None
+    client_id: int | None = None
 @app.post("/api/users")
 def create_user(b: NewUser, req: Request):
     admin_only(req); em = b.email.lower().strip()
     if "@" not in em or not b.name.strip(): raise HTTPException(422, "A name and a valid email are required")
+    if b.mode == "temp_password": check_temp(b.temp_password)
     with db() as c:
+        validate_affiliation(c, b)
         if c.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone(): raise HTTPException(409, "This email is already used")
-        uid = c.execute("INSERT INTO users(email,name,role) VALUES(?,?,'employee') RETURNING id", (em, b.name.strip())).fetchone()["id"]
+        uid = c.execute("INSERT INTO users(email,name,role,trade_id,professional_role_id,client_id) VALUES(?,?,'employee',?,?,?) RETURNING id", (em, b.name.strip(), b.trade_id, b.professional_role_id, b.client_id)).fetchone()["id"]
         c.execute("INSERT INTO trackers(owner_id,start_date) VALUES(?,?)", (uid, date.today().isoformat()))
         if b.mode == "temp_password":  # no email: the admin hands the temporary password over; only its hash is stored
             check_temp(b.temp_password)
@@ -258,7 +266,9 @@ def list_users(req: Request):
     admin_only(req)
     with db() as c:
         return [dict(r) for r in c.execute("""SELECT u.id,u.email,u.name,u.role,u.active,(u.pw IS NOT NULL) has_password,u.must_change_password,t.id tracker_id,
-          (SELECT status FROM emails e WHERE e.user_id=u.id ORDER BY e.id DESC LIMIT 1) last_email FROM users u LEFT JOIN trackers t ON t.owner_id=u.id ORDER BY u.name""")]
+          u.trade_id,u.professional_role_id,u.client_id,m.name trade_name,r.name professional_role_name,k.name client_name,
+          (SELECT status FROM emails e WHERE e.user_id=u.id ORDER BY e.id DESC LIMIT 1) last_email FROM users u LEFT JOIN trackers t ON t.owner_id=u.id
+          LEFT JOIN trades m ON m.id=u.trade_id LEFT JOIN professional_roles r ON r.id=u.professional_role_id LEFT JOIN clients k ON k.id=u.client_id ORDER BY u.name""")]
 @app.post("/api/users/{uid}/resend")
 def resend(uid: int, req: Request):
     admin_only(req)
@@ -320,7 +330,8 @@ def tracker_data(c, t, frm=None, to=None, max_days=800):
     for r in c.execute("SELECT * FROM info WHERE tracker_id=? AND period_id = ANY(?)", (tid, ids)): info.setdefault(r["period_id"], {})[r["kind"]] = r["milli"]
     b = c.execute("""SELECT MIN(p.p_start) AS first, MAX(p.p_end) AS last, COALESCE(SUM(e.milli),0) AS total FROM entries e JOIN activities a ON a.id=e.activity_id
                      JOIN periods p ON p.id=e.period_id WHERE a.tracker_id=?""", (tid,)).fetchone()
-    owner = c.execute("SELECT id,name,email FROM users WHERE id=?", (t["owner_id"],)).fetchone()
+    owner = dict(c.execute("SELECT id,name,email FROM users WHERE id=?", (t["owner_id"],)).fetchone())
+    owner.update(affiliation(c, t["owner_id"]))
     used = {r["activity_id"] for r in c.execute("SELECT DISTINCT e.activity_id FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=?", (tid,))}
     for a in acts: a["has_data"] = a["id"] in used   # any period, visible or not: only activities WITHOUT saved days can be deleted
     return {"tracker": t, "owner": dict(owner), "periods": periods, "activities": acts, "entries": entries, "info": info, "col_totals": col,
@@ -455,7 +466,7 @@ def delete_activity(aid: int, req: Request):
 
 FIELDS = {"affected", "details", "deliverables", "estimation", "status", "progress"}
 WEEK = re.compile(r"^(\d{4})-(\d{1,2})$")
-class Save(BaseModel): changes: list[dict]; comment: str | None = None; weeks: list[str] | None = None; general: bool = False
+class Save(BaseModel): changes: list[dict]; comment: str | None = None; weeks: list[str] | None = None; general: bool = False; comment_scope_explicit: bool = False
 @app.post("/api/trackers/{tid}/save")
 def save(tid: int, b: Save, req: Request):
     u = cur_user(req); batch = uuid.uuid4().hex
@@ -509,7 +520,7 @@ def save(tid: int, b: Save, req: Request):
             for w_, o, n, aid, pid in log: c.execute(HIST, (batch, tid, u["id"], now(), w_, sv(o), sv(n), aid, pid))
             txt = (b.comment or "").strip()
             if txt:
-                scopes = set() if b.general else set(wk)  # automatic: every ISO week touched by the batch; explicit weeks can be added; none -> general comment
+                scopes = set() if b.general or b.comment_scope_explicit else set(wk)  # automatic: every ISO week touched by the batch; explicit weeks can be added; none -> general comment
                 if not b.general:
                     for x in (b.weeks or [])[:60]:
                         m = WEEK.match(x or "")
@@ -522,6 +533,125 @@ def save(tid: int, b: Save, req: Request):
         except BaseException:
             c.execute("ROLLBACK"); raise
     return {"ok": True, "changes": len(log)}
+
+# ---------- affiliations: professional roles are separate from access rights ----------
+AFFILIATION_SELECT = """SELECT u.id,u.trade_id,u.professional_role_id,u.client_id,
+    m.name AS trade_name,r.name AS professional_role_name,k.name AS client_name
+    FROM users u LEFT JOIN trades m ON m.id=u.trade_id
+    LEFT JOIN professional_roles r ON r.id=u.professional_role_id
+    LEFT JOIN clients k ON k.id=u.client_id"""
+
+def affiliation(c, uid):
+    row = c.execute(AFFILIATION_SELECT + " WHERE u.id=?", (uid,)).fetchone()
+    return dict(row) if row else {}
+
+class Affiliation(BaseModel):
+    trade_id: int | None = None
+    professional_role_id: int | None = None
+    client_id: int | None = None
+
+def validate_affiliation(c, b):
+    if b.trade_id is not None and not c.execute("SELECT 1 FROM trades WHERE id=?", (b.trade_id,)).fetchone():
+        raise HTTPException(422, "Unknown trade")
+    if b.professional_role_id is not None:
+        if b.trade_id is None or not c.execute("SELECT 1 FROM professional_roles WHERE id=? AND trade_id=?", (b.professional_role_id, b.trade_id)).fetchone():
+            raise HTTPException(422, "The professional role must belong to the selected trade")
+    if b.client_id is not None and not c.execute("SELECT 1 FROM clients WHERE id=?", (b.client_id,)).fetchone():
+        raise HTTPException(422, "Unknown client")
+
+@app.get("/api/affiliations")
+def affiliation_catalog(req: Request):
+    admin_only(req)
+    with db() as c:
+        return {key: [dict(r) for r in c.execute("SELECT * FROM " + table + " ORDER BY name")]
+                for key, table in (("trades","trades"), ("roles","professional_roles"), ("clients","clients"))}
+
+class CatalogItem(BaseModel):
+    kind: str
+    name: str
+    trade_id: int | None = None
+
+@app.post("/api/affiliations")
+def add_affiliation_item(b: CatalogItem, req: Request):
+    admin_only(req)
+    tables = {"trade": "trades", "role": "professional_roles", "client": "clients"}
+    name = b.name.strip()
+    if b.kind not in tables or not name or len(name) > 100:
+        raise HTTPException(422, "Choose a type and a name of 1–100 characters")
+    with db() as c:
+        try:
+            if b.kind == "role":
+                if not c.execute("SELECT 1 FROM trades WHERE id=?", (b.trade_id,)).fetchone():
+                    raise HTTPException(422, "Choose an existing trade")
+                row = c.execute("INSERT INTO professional_roles(trade_id,name) VALUES(?,?) RETURNING id", (b.trade_id, name)).fetchone()
+            else:
+                row = c.execute("INSERT INTO " + tables[b.kind] + "(name) VALUES(?) RETURNING id", (name,)).fetchone()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "This name already exists")
+    return {"id": row["id"]}
+
+@app.put("/api/users/{uid}/affiliation")
+def set_affiliation(uid: int, b: Affiliation, req: Request):
+    admin_only(req)
+    with db() as c:
+        c.execute("BEGIN")
+        try:
+            user = c.execute("SELECT role FROM users WHERE id=? FOR UPDATE", (uid,)).fetchone()
+            if not user: raise HTTPException(404, "User not found")
+            if user["role"] != "employee": raise HTTPException(422, "Affiliations apply to employees")
+            validate_affiliation(c, b)
+            c.execute("UPDATE users SET trade_id=?,professional_role_id=?,client_id=? WHERE id=?", (b.trade_id, b.professional_role_id, b.client_id, uid))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK"); raise
+    return {"ok": True}
+
+# ---------- exact leave dates: durations remain in the main grid ----------
+class LeaveDates(BaseModel):
+    dates: list[str]
+    old: list[str]
+
+def checked_leave_dates(values, period):
+    if len(values) > period["capacity"] or len(set(values)) != len(values):
+        raise HTTPException(422, "Choose distinct dates, no more than the working days in this period")
+    result = []
+    for value in values:
+        d = pdate(value, "leave")
+        if d.weekday() >= 5 or not period["start"] <= d.isoformat() <= period["end"]:
+            raise HTTPException(422, "Leave dates must be working days within the selected period")
+        result.append(d.isoformat())
+    return sorted(result)
+
+@app.get("/api/trackers/{tid}/leave-dates")
+def read_leave_dates(tid: int, req: Request):
+    u = cur_user(req)
+    with db() as c:
+        get_tracker(c, tid, u)
+        rows = c.execute("SELECT period_id,leave_date FROM leave_dates WHERE tracker_id=? ORDER BY leave_date", (tid,))
+        result = {}
+        for row in rows: result.setdefault(row["period_id"], []).append(row["leave_date"].isoformat())
+    return result
+
+@app.put("/api/trackers/{tid}/leave-dates/{pid}")
+def write_leave_dates(tid: int, pid: int, b: LeaveDates, req: Request):
+    u = cur_user(req)
+    with db() as c:
+        c.execute("BEGIN")
+        try:
+            get_tracker(c, tid, u, lock=True)
+            p = c.execute("SELECT " + PSEL + " FROM periods WHERE id=?", (pid,)).fetchone()
+            if not p: raise HTTPException(404, "Unknown period")
+            dates = checked_leave_dates(b.dates, p)
+            old = [r["leave_date"].isoformat() for r in c.execute("SELECT leave_date FROM leave_dates WHERE tracker_id=? AND period_id=? ORDER BY leave_date", (tid, pid))]
+            if sorted(b.old) != old: raise HTTPException(409, "Leave dates changed. Reload before saving again.")
+            c.execute("DELETE FROM leave_dates WHERE tracker_id=? AND period_id=?", (tid, pid))
+            for d in dates: c.execute("INSERT INTO leave_dates VALUES(?,?,?)", (tid, pid, d))
+            if dates != old:
+                c.execute(HIST, (uuid.uuid4().hex, tid, u["id"], now(), "Leave dates", ", ".join(old), ", ".join(dates), None, pid))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK"); raise
+    return {"dates": dates}
 
 from fastapi.staticfiles import StaticFiles
 STATIC = E("STATIC_DIR", os.path.join(ROOT, "static"))

@@ -15,7 +15,7 @@ def build(d):
     for r, (k, v) in enumerate([("Employee", d["owner"]["name"]), ("Work package", t["work_package"]), ("Mission start", t["start_date"]), ("Mission end", t["end_date"] or "open"), ("Periods exported", f'{d["range"]["from"]} to {d["range"]["to"]}')], 2):
         ws.cell(r, 1, k).font = Font(bold=True); ws.cell(r, 2, v)
     ws["D2"], ws["D3"] = "Completed", "WIP"; ws["D2"].fill, ws["D3"].fill = GREEN, ORANGE
-    h = 9; left = ["Activity details", "Status", "Affected projects", "Deliverables / Functions", "Estimation", "Project Progress in %"]; c0 = len(left) + 1
+    h = 9; left = ["Activity details", "Status", "Affected projects", "Deliverables / Functions", "Alstom Estimation", "Project Progress in %"]; c0 = len(left) + 1
     for i, n in enumerate(left, 1): ws.cell(h, i, n); ws.merge_cells(start_row=h, start_column=i, end_row=h + 2, end_column=i)
     col, start = {}, 0
     for i, p in enumerate(P):

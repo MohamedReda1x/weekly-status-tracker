@@ -74,3 +74,31 @@ table.plain td,table.plain th{padding:6px 10px;background:#fff;text-align:left;w
 .gridtab .note{margin-top:6px}
 .gridtab .mission{font-size:12px;margin-bottom:6px}
 .gridtab .legend{font-size:11px;margin-bottom:4px}
+
+.brand-logo{width:132px;height:30px;object-fit:contain;flex:none}
+.progress-value{position:relative;width:78px}
+.progress-value input{width:100%!important;padding-right:22px!important;text-align:right}
+.progress-value span{position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--mut)}
+.date-range{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.date-range label{font-size:12px;color:var(--mut)}
+.date-range input{border:1px solid var(--line);border-radius:5px;padding:4px}
+.gridtab td.info input{color:var(--bad);font-weight:600}
+
+.weekly-comment{flex:none;display:flex;align-items:center;gap:10px;padding:8px 0}
+.weekly-comment label{font-weight:600;font-size:12px;color:var(--pri);white-space:nowrap}
+.weekly-comment textarea{flex:1;min-width:160px;min-height:42px;max-height:120px;border:1px solid var(--line);border-radius:6px;padding:7px;resize:vertical}
+.gridtab tfoot tr:not(.inp) td{background:#173f60!important;color:#fff}
+.gridtab tfoot td.over{background:var(--bad)!important}
+.gridtab tfoot td.full{box-shadow:inset 0 -3px 0 #f2ce65}
+.affiliation-banner{flex:none;display:flex;gap:6px 18px;flex-wrap:wrap;color:var(--pri);font-size:12px;margin-bottom:6px}
+.affiliation-fields label{min-width:160px}
+.affiliation-fields select,.meta label>input{display:block;width:100%;margin-top:3px}
+.catalog-list{font-size:13px}.catalog-list p{margin:5px 0}
+.plain td details{margin-top:5px;min-width:230px}.plain td details summary{cursor:pointer;color:var(--pri);font-size:12px}
+.leave-dates h2{margin-top:0;font-size:18px}
+.leave-duration{color:var(--bad);font-weight:600}
+.leave-date-choices{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px}
+.leave-date-choices button{padding:6px 12px}
+.leave-date-choices button[aria-pressed=true]{background:var(--pri);border-color:var(--pri);color:#fff}
+@media(max-width:800px){.weekly-comment{align-items:stretch;flex-direction:column}}
+.current-week-comments{flex:none;max-height:140px;overflow:auto;font-size:12px;white-space:pre-wrap}

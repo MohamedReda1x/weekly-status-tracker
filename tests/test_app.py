@@ -277,7 +277,7 @@ def test_export_scopes_and_all_comments(world):
         for i in range(260): k.execute("INSERT INTO comments(tracker_id,author_id,text,created) VALUES(?,?,?,?)", (ta, uid, f"general {i}", "2026-01-01T00:00:00"))
     def get(q): r = a.get(f"/api/trackers/{ta}/export.xlsx?{q}"); assert r.status_code == 200, r.text; return load_workbook(io.BytesIO(r.content))
     ws = get("scope=view&from=2026-09-01&to=2026-09-30")["Weekly Status"]
-    vals = [c.value for row in ws.iter_rows() for c in row if c.value is not None]; assert "Estimation" in vals and not any("Alstom" in str(v) for v in vals) and "Sep-26" in vals and "Oct-26" not in vals
+    vals = [c.value for row in ws.iter_rows() for c in row if c.value is not None]; assert "Alstom Estimation" in vals and "Sep-26" in vals and "Oct-26" not in vals
     wb = get("scope=range&from=2026-09-01&to=2026-11-30"); sm = wb["Summary report"]
     assert sm.max_row == 1 + 261 and any(c.value == "WEEK39/2026, WEEK40/2026, WEEK46/2026" for row in sm.iter_rows() for c in row)   # ALL comments (>200) + the multi-week scope
     bl = wb["Monthly BL"]; last = {bl.cell(r_, 1).value: [bl.cell(r_, c).value for c in range(3, bl.max_column + 1)] for r_ in range(1, bl.max_row + 1)}

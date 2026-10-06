@@ -56,7 +56,7 @@ Laisser Railway injecter PORT et utiliser ce port comme port cible du domaine.
 
 La validation HTTPS/mot de passe intervient au démarrage FastAPI, avant init().
 Les migrations s'exécutent auparavant, conformément au CMD du Dockerfile.
-Sur une base neuve, les migrations créent le schéma jusqu'à 0003 ; init()
+Sur une base neuve, les migrations créent le schéma jusqu'à 0004 ; init()
 crée le calendrier et le premier administrateur si users est vide.
 Modifier ADMIN_PASSWORD ensuite ne change pas le mot de passe d'un compte
 déjà créé : utiliser le changement de mot de passe dans l'application.
@@ -133,8 +133,13 @@ Fermer l'accès public PostgreSQL après usage s'il n'est plus nécessaire.
 Avant chaque mise à jour distante, sauvegarder la base et noter le commit,
 le déploiement réussi et les variables du service applicatif.
 
-Pour cette modification, aucune migration nouvelle n'est ajoutée :
-le schéma reste 0003. Dans le service applicatif / Deployments, ouvrir
+La mise à jour métier/rôle/client et dates de congé ajoute la migration 0004.
+Elle conserve les tables et données existantes, ajoute des colonnes facultatives
+et des tables nouvelles. Les employés existants restent sans affiliation
+jusqu'au choix du manager. Voir UPDATE_0004.md avant de déployer.
+Le code précédent reste compatible avec les ajouts de 0004 :
+ne pas lancer alembic downgrade pour un retour arrière applicatif.
+Dans le service applicatif / Deployments, ouvrir
 le menu du déploiement réussi précédent, choisir Rollback et confirmer.
 Railway restaure son image et ses variables personnalisées ; vérifier
 DATABASE_URL, APP_URL et COOKIE_SECURE, puis /api/health et la connexion.
