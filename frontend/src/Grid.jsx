@@ -54,7 +54,6 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
       const a = T.activities[ri + dr], p = P[ci + dc]
       if (!a || !p || a.archived) { ignored++; return }
       const old = (T.entries[a.id] || {})[p.id] || 0
-      if (outside(p) && !old) { ignored++; return }
       const raw = v.trim(), value = pm(raw)
       if (value === null || value > 1000000) { invalid.push(`row ${dr + 1}, column ${dc + 1}`); return }
       edits.push([`c:${a.id}:${p.id}`, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw }])
@@ -122,7 +121,7 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
             title={rowDirty ? 'Save or discard changes to this activity first' : 'Delete permanently: only activities without saved days'}
             onClick={() => run(async () => { if (!confirm('Delete this empty activity permanently? This cannot be undone.')) return; await api(`/activities/${a.id}`, { method: 'DELETE' }); dropPending(a.id); setMsg('Activity deleted.'); setErr(''); await reload() })}><GridIcon name="delete" /></button>}
         </div></td>
-        {P.map((p, ci) => { const k = `c:${a.id}:${p.id}`, old = (T.entries[a.id] || {})[p.id] || 0, off = a.archived || (outside(p) && !old)
+        {P.map((p, ci) => { const k = `c:${a.id}:${p.id}`, old = (T.entries[a.id] || {})[p.id] || 0, off = !!a.archived
           return <td key={p.id} className={`n wk ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''} ${off ? 'off' : ''} ${outside(p) ? 'out' : ''}`}><input inputMode="decimal" data-r={ri} data-c={ci} onKeyDown={e => nav(e, ri, ci)} onPaste={e => paste(e, ri, ci)} aria-label={`days-${a.id}-${p.id}`} value={eff(a.id, p.id)} disabled={off} onChange={e => edit(k, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr> })}</tbody>
       <tfoot>{(showInfo || infoDirty) && <>{infoRow('leave', 'Leave / Holidays (info only) :')}{infoRow('ph', 'PH holidays (info only) :')}</>}
         {showTotals && <><tr><td className="lab stl" colSpan={2}>Actual days spent on activity / week :</td><td colSpan={5} />

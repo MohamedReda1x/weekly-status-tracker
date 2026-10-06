@@ -198,4 +198,15 @@ describe('draft undo without backend', () => {
     expect(screen.getByLabelText('leave-1').value).toBe('1')
     expect(toggle.disabled).toBe(true)
   })
+
+  it('allows typing and pasting before and after mission dates', () => {
+    const data = { ...T, tracker: { ...T.tracker, start_date: '2026-11-01', end_date: '2026-11-30' },
+      periods: [T.periods[0], { ...T.periods[1], start: '2026-12-07', end: '2026-12-11', month_key: '2026-12' }] }
+    render(<Harness data={data} />)
+    expect(cell(1).disabled).toBe(false); expect(cell(2).disabled).toBe(false)
+    fireEvent.change(cell(1), { target: { value: '1' } })
+    expect(cell(1).value).toBe('1')
+    fireEvent.paste(cell(1), { clipboardData: { getData: () => '2\t3' } })
+    expect(cell(1).value).toBe('2'); expect(cell(2).value).toBe('3')
+  })
 })

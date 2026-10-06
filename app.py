@@ -464,7 +464,6 @@ def save(tid: int, b: Save, req: Request):
         try:
             t = get_tracker(c, tid, u, lock=True)  # 404 for anyone but owner/admin; row lock serialises concurrent saves of one tracker
             pm = {p["id"]: p for p in c.execute(f"SELECT {PSEL} FROM periods")}
-            start = date.fromisoformat(t["start_date"]); mend = date.fromisoformat(t["end_date"]) if t["end_date"] else None
             conflicts, touched, log, wk = [], set(), [], set()
             for ch in b.changes:
                 kind = ch.get("type")
@@ -477,8 +476,6 @@ def save(tid: int, b: Save, req: Request):
                     except ValueError as ex: raise HTTPException(422, f"{p['month_key']} WK{p['iso_week']}: {ex}")
                     r = c.execute("SELECT milli FROM entries WHERE activity_id=? AND period_id=?", (a["id"], p["id"])).fetchone(); curv = r["milli"] if r else 0
                     if curv != int(ch.get("old", 0)): conflicts.append({"key": f"c:{a['id']}:{p['id']}", "current": curv}); continue
-                    ps, pe = date.fromisoformat(p["start"]), date.fromisoformat(p["end"])
-                    if new and not curv and (pe < start or (mend and ps > mend)): raise HTTPException(422, f"WK{p['iso_week']} ({p['month_key']}) is outside the mission dates. Change the mission dates first.")
                     if new: c.execute("INSERT INTO entries VALUES(?,?,?) ON CONFLICT (activity_id,period_id) DO UPDATE SET milli=EXCLUDED.milli", (a["id"], p["id"], new))
                     else: c.execute("DELETE FROM entries WHERE activity_id=? AND period_id=?", (a["id"], p["id"]))
                     touched.add(p["id"]); wk.add((p["iso_year"], p["iso_week"])); log.append((f"'{a['details'] or a['id']}' · WK{p['iso_week']} ({p['month_key']})", curv / 1000, new / 1000, a["id"], p["id"]))

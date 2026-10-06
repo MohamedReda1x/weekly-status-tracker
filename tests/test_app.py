@@ -236,7 +236,7 @@ def test_period_navigation_is_independent_and_lossless(world):
     assert adm.put(f"/api/trackers/{ta}", json={"work_package": "WP", "start_date": "2026-11-01", "end_date": "2026-12-31"}).status_code == 200
     d = adm.get(f"/api/trackers/{ta}?{RNG}").json(); assert d["entries"][str(a1)][str(p["id"])] == 1500 and d["bounds"]["all_total"] == 1500
     assert save(a, ta, [cell(a1, p["id"], "1", 1500)]).status_code == 200                       # outside mission but already has data: correction allowed
-    other = w["period"](2026, 38, "2026-09"); assert save(a, ta, [cell(a1, other["id"], "1")]).status_code == 422   # new entry outside mission: blocked
+    other = w["period"](2026, 38, "2026-09"); assert save(a, ta, [cell(a1, other["id"], "1")]).status_code == 200   # retroactive entry allowed even outside mission dates
     assert adm.put(f"/api/trackers/{ta}", json={"work_package": "WP", "start_date": "2026-09-01"}).status_code == 200   # no end date: continues automatically, no client needed
     mar = next(p for p in adm.get(f"/api/trackers/{ta}?from=2027-03-01&to=2027-03-31").json()["periods"] if p["iso_week"] == 10)
     assert save(a, ta, [cell(a1, mar["id"], "1")]).status_code == 200

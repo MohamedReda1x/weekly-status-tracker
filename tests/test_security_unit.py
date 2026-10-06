@@ -122,5 +122,36 @@ class SecurityTests(unittest.TestCase):
             init.assert_called_once()
 
 
+
+    def test_new_entries_outside_mission_dates(self):
+        for start, end, month, week in (
+            ("2026-09-07", "2026-09-11", "2026-09", 37),
+            ("2026-12-07", "2026-12-11", "2026-12", 50),
+        ):
+            with self.subTest(period=start):
+                period = dict(id=1, start=start, end=end, month_key=month,
+                              iso_year=2026, iso_week=week, capacity=5)
+                def execute(sql, params=()):
+                    result = MagicMock()
+                    if sql.startswith("SELECT id, p_start"):
+                        result.__iter__.return_value = iter([period])
+                    elif sql.startswith("SELECT * FROM activities"):
+                        result.fetchone.return_value = dict(id=7, archived=0, details="Review")
+                    elif sql.startswith("SELECT milli"):
+                        result.fetchone.return_value = None
+                    elif sql.startswith("SELECT COALESCE(SUM"):
+                        result.fetchone.return_value = {"v": 1000}
+                    return result
+                self.sql.execute.side_effect = execute
+                with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(
+                    app, "get_tracker", return_value={"start_date": "2026-11-01", "end_date": "2026-11-30"}
+                ):
+                    result = app.save(1, app.Save(changes=[dict(type="cell", activity_id=7,
+                                      period_id=1, old=0, new="1")]), Request({"type": "http"}))
+                self.assertEqual(result, {"ok": True, "changes": 1})
+                statements = [call.args[0] for call in self.sql.execute.call_args_list]
+                self.assertIn("COMMIT", statements)
+                self.assertTrue(any(sql.startswith("INSERT INTO entries") for sql in statements))
+
 if __name__ == "__main__":
     unittest.main()
