@@ -158,7 +158,8 @@ describe('draft undo without backend', () => {
     const data = { ...T, activities: [{ ...T.activities[0], archived: true, has_data: true }], entries: { 7: { 1: 1500 } } }
     render(<Harness data={data} />)
     expect(screen.getByRole('button', { name: 'Restore' }).title).toContain('Restore editing')
-    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Delete' }).title).toContain('Saved days exist')
     expect(cell(1).disabled).toBe(true)
     expect(cell(1).value).toBe('1.5')
   })

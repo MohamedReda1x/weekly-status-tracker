@@ -11,8 +11,12 @@ sur une base réelle n'a été exécutée pendant sa préparation.
   qui intersectent l'intervalle, sans découper leurs valeurs enregistrées.
 - Les semaines anciennes sont modifiables, sans hachures. Les activités
   archivées restent non modifiables ; Restore les réactive.
-- Leave / PH sont toujours affichés, nombres rouges. Totaux toujours affichés,
-  défilants, fond bleu foncé et texte blanc. Undo / Redo restent disponibles.
+- Leave / PH et totaux restent visibles en bas de la grille pendant le
+  défilement des activités, nombres Leave / PH rouges. En-têtes et totaux :
+  fond bleu foncé et texte blanc. Undo / Redo restent disponibles.
+  Add activity et le commentaire sont séparés sans chevauchement.
+  La corbeille reste visible mais désactivée si des jours sont enregistrés,
+  avec une explication au survol ; Archive conserve ces jours et les totaux.
 - Sous la grille : saisie et dix derniers commentaires de la semaine courante.
   L'enregistrement peut contenir un commentaire sans modification de cellule.
   Les anciens commentaires restent dans Comments & history.
@@ -29,6 +33,10 @@ sur une base réelle n'a été exécutée pendant sa préparation.
   Le serveur et une contrainte SQL vérifient cette correspondance.
   Le client est indépendant. Les droits Manager/Employee sont distincts.
   Le métier/rôle/client du propriétaire du tracker sont visibles au-dessus du contenu.
+- Le manager peut combiner les filtres Trade / Professional role / Client
+  pour sélectionner les employés. Le rôle proposé dépend du métier choisi.
+  Un filtre sans résultat ne conserve pas l'ancien tracker à l'écran.
+  Les modifications non enregistrées sont protégées avant de changer d'employé.
 - Accounts / Manage trades, professional roles and clients permet d'ajouter des choix.
 
 ## Fichiers de la mise à jour

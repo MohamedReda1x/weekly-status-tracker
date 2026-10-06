@@ -61,6 +61,7 @@ function Shell({ me, onOut }) {
   const mgr = me.role === 'admin', narrow = useNarrow()
   const [tab, setTab] = useState('grid'), [users, setUsers] = useState(null), [sel, setSel] = useState(mgr ? null : me.tracker_id), [T, setT] = useState(null), [loading, setLoading] = useState(true)
   const [view, setView] = useState({ mode: 'month', anchor: todayAnchor(), from: '', to: '' })
+  const [affFilters, setAffFilters] = useState({ trade_id: '', professional_role_id: '', client_id: '' })
   const { pending, setPending, changePending, endGroup, undo, redo, canUndo, canRedo } = useDraftHistory()
   const [conf, setConf] = useState({}), [msg, setMsg] = useState(''), [err, setErr] = useState(''), [saving, setSaving] = useState(false), [comment, setComment] = useState('')
   const [dlg, setDlg] = useState(null), [exp, setExp] = useState(null), [loadFail, setLoadFail] = useState(null)
@@ -118,9 +119,21 @@ function Shell({ me, onOut }) {
     } catch (e) { setExp(x => ({ ...x, busy: false, error: e.message })) }
   }
 
-  const employees = (users || []).filter(u => u.tracker_id && u.role === 'employee'), ids = employees.map(u => u.tracker_id), idx = ids.indexOf(+sel)
+  const allEmployees = (users || []).filter(u => u.tracker_id && u.role === 'employee')
+  const matchesAffiliation = (u, filters) => Object.entries(filters).every(([key, value]) => !value || String(u[key]) === value)
+  const employees = allEmployees.filter(u => matchesAffiliation(u, affFilters)), ids = employees.map(u => u.tracker_id), idx = ids.indexOf(+sel)
+  const filterOptions = (key, name) => [...new Map(allEmployees.filter(u => u[key] && (key !== 'professional_role_id' || !affFilters.trade_id || String(u.trade_id) === affFilters.trade_id)).map(u => [u[key], { id: u[key], name: u[name] }])).values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  const changeAffFilters = filters => guard(async () => {
+    setAffFilters(filters)
+    const matching = allEmployees.filter(u => matchesAffiliation(u, filters))
+    if (matching.some(u => u.tracker_id === +sel)) return
+    setErr(''); setMsg(''); setComment(''); setT(null)
+    const next = matching[0]?.tracker_id || null
+    setSel(next)
+    if (next) await load(next, view)
+  })
   const nav = [['grid', 'Tracker'], ...(mgr ? [['bl', 'Monthly BL']] : []), ['activity', 'Comments & history'], ['leave', 'Leave dates'], ...(mgr ? [['acc', 'Accounts']] : [])]
-  const empty = mgr && users && !employees.length
+  const empty = mgr && users && !allEmployees.length
   const setMode = m => { const [y, mo] = (view.anchor).split('-').map(Number); if (m === 'custom') return goView({ mode: 'custom', anchor: view.anchor, from: range.from, to: range.to }); if (m === 'mission' && T) { const s = T.tracker.start_date, e = T.tracker.end_date || ymd(new Date(Math.max(Date.now(), T.bounds.last ? Date.parse(T.bounds.last) : 0))); return goView({ mode: 'custom', anchor: s.slice(0, 7), from: monthStart(+s.slice(0, 4), +s.slice(5, 7)), to: monthEnd(+e.slice(0, 4), +e.slice(5, 7)), mission: true }) } goView({ mode: m, anchor: view.anchor }) }
 
   return <div className="app">
@@ -136,7 +149,7 @@ function Shell({ me, onOut }) {
         <input type="month" aria-label="Go to month" value={view.anchor} onChange={e => e.target.value && goView({ mode: view.mode === 'custom' ? 'month' : view.mode, anchor: e.target.value })} />
         <select aria-label="View" value={view.mode === 'custom' && view.mission ? 'mission' : view.mode} onChange={e => setMode(e.target.value)}><option value="month">Month</option><option value="quarter">Quarter</option><option value="mission">Whole mission</option><option value="custom">Date range</option></select>
         {view.mode === 'custom' && !view.mission && <DateRangePicker from={view.from} to={view.to} onApply={bounds => goView({ ...view, ...bounds })} />}
-        <strong className="plabel" data-testid="period-label">{viewLabel(view, range)}</strong></span>}
+        {view.mode !== 'custom' && <strong className="plabel" data-testid="period-label">{viewLabel(view, range)}</strong>}</span>}
       <span className="sp" />
       {T && !empty && <button onClick={() => setExp({ scope: 'view', from: range.from, to: range.to, busy: false, error: '' })}>Export Excel</button>}
       <details className="user"><summary>{me.email}</summary><button onClick={() => guard(onOut)}>Sign out</button></details></header>
@@ -147,13 +160,23 @@ function Shell({ me, onOut }) {
     {(!T || empty) && mgr && <nav><button className={tab !== 'acc' ? 'on' : ''} onClick={() => setTab('grid')}>Tracker</button><button className={tab === 'acc' ? 'on' : ''} onClick={() => setTab('acc')}>Accounts</button></nav>}
     <main>
       <Err onRetry={loadFail}>{err}</Err><Ok>{msg}</Ok>
-      {T && !empty && tab !== 'acc' && <div className="affiliation-banner" aria-label="Employee affiliation"><b>{T.owner.name}</b>
-        <span>Trade: {T.owner.trade_name || 'Not assigned'}</span><span>Role: {T.owner.professional_role_name || 'Not assigned'}</span><span>Client: {T.owner.client_name || 'Not assigned'}</span>
+      {mgr && allEmployees.length > 0 && <section className="affiliation-filters" aria-label="Filter employees by affiliation">
+        <b>Filter employees</b>
+        {[['trade_id', 'Trade', 'trade_name'], ['professional_role_id', 'Professional role', 'professional_role_name'], ['client_id', 'Client', 'client_name']].map(([key, label, name]) => <label key={key}>{label}
+          <select aria-label={'Filter ' + label} disabled={loading || saving} value={affFilters[key]} onChange={e => changeAffFilters({ ...affFilters, [key]: e.target.value, ...(key === 'trade_id' ? { professional_role_id: '' } : {}) })}>
+            <option value="">All</option>{filterOptions(key, name).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        </label>)}
+        <span>{employees.length} / {allEmployees.length} employees</span>
+        <button disabled={loading || saving} onClick={() => changeAffFilters({ trade_id: '', professional_role_id: '', client_id: '' })}>Reset filters</button>
+      </section>}
+      {T && !empty && tab !== 'acc' && <div className="affiliation-banner" aria-label="Employee affiliation"><div className="affiliation-person"><small>Employee</small><b>{T.owner.name}</b></div>
+        <div><small>Trade</small><strong>{T.owner.trade_name || 'Not assigned'}</strong></div><div><small>Professional role</small><strong>{T.owner.professional_role_name || 'Not assigned'}</strong></div><div><small>Client</small><strong>{T.owner.client_name || 'Not assigned'}</strong></div>
       </div>}
       {loading && !T && <div className="center" role="status">Loading tracker…</div>}
       {tab === 'acc' && mgr && <Accounts me={me} users={users || []} refresh={refreshUsers} setErr={setErr} setMsg={setMsg} />}
       {tab !== 'acc' && empty && <div className="card empty"><h2>No employee yet</h2><p>Create an account for each team member. Each employee gets one tracker and sees only their own.</p><button className="p" onClick={() => setTab('acc')}>Create employee</button></div>}
-      {tab !== 'acc' && !empty && !T && !loading && !err && <div className="card empty"><h2>No tracker available</h2><p>{mgr ? 'Select an employee above.' : 'Ask your manager to check your account.'}</p></div>}
+      {tab !== 'acc' && !empty && !T && !loading && !err && <div className="card empty"><h2>{mgr && !employees.length ? 'No employee matches these filters' : 'No tracker available'}</h2><p>{mgr ? 'Adjust the affiliation filters or select an employee.' : 'Ask your manager to check your account.'}</p></div>}
       {T && !empty && tab === 'grid' && (narrow ? <MobileList T={T} /> : <Grid {...{ T, pending, conf, edit, editBatch, endEdit: endGroup, undo, redo, canUndo, canRedo, historyDisabled: saving || !!dlg || !!exp, mgr, colTotal, setErr, setMsg, sel, loading, reload: () => load(sel, view, true), dropPending: aid => setPending(P => Object.fromEntries(Object.entries(P).filter(([, q]) => q.activity_id !== aid))), onMission: () => load(sel, view, true) }} />)}
       {T && !empty && tab === 'grid' && <section className="weekly-comment" aria-label="Weekly commentary">
         <label htmlFor="current-week-comment">Current week · {weekLabel(currentWeek)}</label>

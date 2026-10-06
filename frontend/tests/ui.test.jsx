@@ -61,7 +61,7 @@ describe('manager and employee journeys', () => {
     const mt = () => Number(screen.getAllByTestId(/^mt-/)[0].textContent.replace('*', '')); const before = mt(); expect(before).toBeGreaterThan(0)
     click('Archive'); await screen.findByText('Archived'); expect(mt()).toBe(before)
     click('Restore'); await waitFor(() => expect(screen.queryByText('Archived')).toBeNull())
-    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()      // days are saved on this activity: archive only
+    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(true) // days are saved: visible explanation, archive remains available
     expect(screen.queryByRole('button', { name: 'Monthly BL' })).toBeNull()
     // keyboard + Excel paste
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); await waitFor(() => expect(screen.getAllByLabelText(/^details-/).length).toBe(2))
