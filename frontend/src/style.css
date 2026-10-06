@@ -57,3 +57,20 @@ table.plain td,table.plain th{padding:6px 10px;background:#fff;text-align:left;w
 .activity-actions .danger{color:#b64141}
 .activity-actions .danger:hover:not(:disabled){background:#fff0f0;border-color:#edcaca;color:#a32222}
 .gridtab .actions-heading{width:80px;min-width:80px;font-size:12px;color:var(--mut)}
+
+/* Activities get priority; summaries no longer pin themselves over the rows. */
+.grid-toolbar{flex:none;padding:5px 8px;gap:8px;margin-bottom:6px}
+.grid-toolbar .view-toggle{padding:5px 8px;font-size:12px}
+.grid-toolbar .view-toggle[aria-pressed=true]{background:#edf3f9;border-color:#9db0c6;color:var(--pri)}
+.gridtab.activities-focus .mission,.gridtab.activities-focus .legend,.gridtab.activities-focus .note small,.gridtab.activities-focus .grid-help{display:none}
+.gridtab.activities-focus thead th{height:22px;line-height:20px;font-size:12px}
+.gridtab.activities-focus thead tr:nth-child(2) th{top:22px}
+.gridtab.activities-focus thead tr:nth-child(3) th{top:44px}
+.gridtab tbody td{height:42px}
+.gridtab tbody td input,.gridtab tbody td select{min-height:40px;padding:8px}
+.gridtab tbody td textarea{min-height:40px;padding:9px 8px}
+.gridtab tfoot td{position:static;bottom:auto;height:28px;font-size:12px}
+.gridtab tfoot .stl{position:sticky;left:0;bottom:auto}
+.gridtab .note{margin-top:6px}
+.gridtab .mission{font-size:12px;margin-bottom:6px}
+.gridtab .legend{font-size:11px;margin-bottom:4px}

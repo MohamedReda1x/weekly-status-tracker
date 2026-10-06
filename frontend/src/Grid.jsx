@@ -76,6 +76,8 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
   const txt = (a, f, ph) => <td className={'txt ' + (pending[`f:${a.id}:${f}`] ? 'dirty' : '')}><AutoText label={`${f}-${a.id}`} value={pf(a, f)} placeholder={ph} disabled={!!a.archived} onChange={v => onField(a, f, v)} /></td>
   const infoRow = (kind, label) => <tr className="inp"><td className="lab stl" colSpan={2}>{label}</td><td colSpan={5} />
     {P.map(p => { const k = `i:${kind}:${p.id}`, old = (T.info[p.id] || {})[kind] || 0; return <td key={p.id} className={`n info ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''}`}><input inputMode="decimal" aria-label={`${kind}-${p.id}`} value={pending[k] ? pending[k].raw : fmt(old)} onChange={e => edit(k, { type: 'info', kind, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr>
+  const [focusActivities, setFocusActivities] = useState(true), [showInfo, setShowInfo] = useState(false), [showTotals, setShowTotals] = useState(true)
+  const infoDirty = Object.values(pending).some(q => q.type === 'info')
   const actionsLocked = busy || loading || historyDisabled
   const hasMonthPartial = Object.values(T.month_complete).some(x => !x)
   const historyKeys = e => {
@@ -86,12 +88,15 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
     if (historyDisabled || loading || busy) return
     if (key === 'y' || e.shiftKey) redo(); else undo()
   }
-  return <div className="gridtab" onKeyDownCapture={historyKeys}>
+  return <div className={'gridtab' + (focusActivities ? ' activities-focus' : '')} onKeyDownCapture={historyKeys}>
     <div className="grid-toolbar" role="toolbar" aria-label="Grid editing">
       <div className="history-buttons">
         <button aria-label="Undo" title="Undo last unsaved grid edit (Ctrl+Z)" disabled={!canUndo || historyDisabled || loading || busy} onClick={undo}><GridIcon name="undo" /><span>Undo</span></button>
         <button aria-label="Redo" title="Redo grid edit (Ctrl+Y or Ctrl+Shift+Z)" disabled={!canRedo || historyDisabled || loading || busy} onClick={redo}><GridIcon name="redo" /><span>Redo</span></button>
       </div>
+      <button className="view-toggle" aria-pressed={focusActivities} onClick={() => setFocusActivities(v => !v)} title="Hide mission details and legend to give activities more space">Focus activities</button>
+      <button className="view-toggle" aria-expanded={showTotals} onClick={() => setShowTotals(v => !v)}>Totals</button>
+      <button className="view-toggle" aria-expanded={showInfo || infoDirty} disabled={infoDirty} title={infoDirty ? 'Save or discard holiday edits before hiding them' : 'Show optional leave and public holiday information'} onClick={() => setShowInfo(v => !v)}>Leave / holidays</button>
       <span className="grid-help">Tab to move · Enter for next row</span>
       <span className="draft-status">{Object.keys(pending).length ? `${Object.keys(pending).length} unsaved change(s)` : 'All changes saved'}</span>
     </div>
@@ -119,10 +124,10 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
         </div></td>
         {P.map((p, ci) => { const k = `c:${a.id}:${p.id}`, old = (T.entries[a.id] || {})[p.id] || 0, off = a.archived || (outside(p) && !old)
           return <td key={p.id} className={`n wk ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''} ${off ? 'off' : ''} ${outside(p) ? 'out' : ''}`}><input inputMode="decimal" data-r={ri} data-c={ci} onKeyDown={e => nav(e, ri, ci)} onPaste={e => paste(e, ri, ci)} aria-label={`days-${a.id}-${p.id}`} value={eff(a.id, p.id)} disabled={off} onChange={e => edit(k, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr> })}</tbody>
-      <tfoot>{infoRow('leave', 'Leave / Holidays (info only) :')}{infoRow('ph', 'PH holidays (info only) :')}
-        <tr><td className="lab stl" colSpan={2}>Actual days spent on activity / week :</td><td colSpan={5} />
+      <tfoot>{(showInfo || infoDirty) && <>{infoRow('leave', 'Leave / Holidays (info only) :')}{infoRow('ph', 'PH holidays (info only) :')}</>}
+        {showTotals && <><tr><td className="lab stl" colSpan={2}>Actual days spent on activity / week :</td><td colSpan={5} />
           {P.map(p => { const v = colTotal(p.id), cap = p.capacity * 1000; return <td key={p.id} data-testid={`ct-${p.id}`} className={'calc' + (v > cap ? ' over' : v === cap ? ' full' : '')}>{fmt(v) || '0'}</td> })}</tr>
-        <tr><td className="lab stl" colSpan={2}>Monthwise (in days) :</td><td colSpan={5} />{G.map(g => <td key={g.k} colSpan={g.n} data-testid={`mt-${g.k}`} className="calc"><span className="mh">{fmt(mtot(g.k)) || '0'}{T.month_complete[g.k] ? '' : ' *'}</span></td>)}</tr></tfoot></table></div>
+        <tr><td className="lab stl" colSpan={2}>Monthwise (in days) :</td><td colSpan={5} />{G.map(g => <td key={g.k} colSpan={g.n} data-testid={`mt-${g.k}`} className="calc"><span className="mh">{fmt(mtot(g.k)) || '0'}{T.month_complete[g.k] ? '' : ' *'}</span></td>)}</tr></>}</tfoot></table></div>
     <p className="note"><button disabled={busy} onClick={() => run(async () => { await api(`/trackers/${sel}/activities`, { method: 'POST' }); await reload() })}>+ Add activity</button>
       <small> Totals cover the periods shown ({T.range.from} → {T.range.to}), all activities including archived ones.{hasMonthPartial ? ' * = month only partly shown.' : ''}</small></p>
   </div>
