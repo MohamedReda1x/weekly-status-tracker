@@ -45,7 +45,7 @@ describe('manager and employee journeys', () => {
     expect(await screen.findByLabelText('Employee affiliation')).toBeTruthy(); expect((await screen.findAllByText('Alstom Estimation')).length).toBeGreaterThan(0)
     // an activity added by mistake can be deleted while it has no saved day
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-    await screen.findByText('Activity deleted.'); await waitFor(() => expect(screen.queryAllByLabelText(/^details-/).length).toBe(0))
+    await screen.findByText('Activity moved to trash. Its days are excluded from totals.'); await waitFor(() => expect(screen.queryAllByLabelText(/^details-/).length).toBe(0))
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' }))
     type(await screen.findByLabelText(/^details-/), 'Review SwDS')
     const T = await (await fetch('/api/trackers/' + tid)).json()
@@ -61,7 +61,7 @@ describe('manager and employee journeys', () => {
     const mt = () => Number(screen.getAllByTestId(/^mt-/)[0].textContent.replace('*', '')); const before = mt(); expect(before).toBeGreaterThan(0)
     click('Archive'); await screen.findByText('Archived'); expect(mt()).toBe(before)
     click('Restore'); await waitFor(() => expect(screen.queryByText('Archived')).toBeNull())
-    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(true) // days are saved: visible explanation, archive remains available
+    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(false) // recoverable deletion also applies to saved days
     expect(screen.queryByRole('button', { name: 'Monthly BL' })).toBeNull()
     // keyboard + Excel paste
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); await waitFor(() => expect(screen.getAllByLabelText(/^details-/).length).toBe(2))

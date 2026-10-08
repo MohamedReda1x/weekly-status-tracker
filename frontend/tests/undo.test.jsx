@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
-import { describe, it, expect, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import Grid from '../src/Grid.jsx'
 import useDraftHistory from '../src/useDraftHistory.js'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const T = {
   tracker: { id: 1, work_package: '', start_date: '2026-01-01', end_date: null },
   periods: [1, 2].map(id => ({ id, start: '2026-10-05', end: '2026-10-09', month_key: '2026-10', iso_week: 41, capacity: 5 })),
@@ -158,8 +158,8 @@ describe('draft undo without backend', () => {
     const data = { ...T, activities: [{ ...T.activities[0], archived: true, has_data: true }], entries: { 7: { 1: 1500 } } }
     render(<Harness data={data} />)
     expect(screen.getByRole('button', { name: 'Restore' }).title).toContain('Restore editing')
-    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(true)
-    expect(screen.getByRole('button', { name: 'Delete' }).title).toContain('Saved days exist')
+    expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Delete' }).title).toContain('exclude its days')
     expect(cell(1).disabled).toBe(true)
     expect(cell(1).value).toBe('1.5')
   })
@@ -213,5 +213,34 @@ describe('draft undo without backend', () => {
     expect(screen.getByText('Alstom Estimation')).toBeTruthy()
     undo()
     expect(progress.value).toBe('0')
+  })
+  it('deletes a populated activity only after confirming exclusion from totals', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<Harness data={{ ...T, activities: [{ ...T.activities[0], has_data: true }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' }).disabled).toBe(false))
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(confirm.mock.calls[0][0]).toContain('excluded from all totals')
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await screen.findByText('Activity moved to trash. Its days are excluded from totals.')
+    expect(fetcher.mock.calls[0][0]).toBe('/api/activities/7')
+    expect(fetcher.mock.calls[0][1].method).toBe('DELETE')
+  })
+  it('offers trash restoration and blocks it while grid edits are pending', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<Harness data={{ ...T, deleted_activities: [{ id: 8, details: 'Deleted task', total: 1500 }] }} />)
+    const restore = screen.getByRole('button', { name: 'Restore deleted activity 8' })
+    expect(screen.getByText('Trash (1)')).toBeTruthy()
+    fireEvent.change(cell(1), { target: { value: '1' } })
+    expect(restore.disabled).toBe(true)
+    undo()
+    fireEvent.click(restore)
+    await screen.findByText('Activity restored from trash. Its days count in totals again.')
+    expect(fetcher.mock.calls[0][0]).toBe('/api/activities/8/undelete')
   })
 })

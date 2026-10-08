@@ -316,9 +316,10 @@ def tracker_data(c, t, frm=None, to=None, max_days=800):
     tid = t["id"]; f, l = resolve_range(c, t, frm, to, max_days)
     periods = [dict(p) for p in c.execute(f"SELECT {PSEL} FROM periods WHERE p_end>=? AND p_start<=? ORDER BY p_start", (f.isoformat(), l.isoformat()))]
     pm = {p["id"]: p for p in periods}; ids = list(pm)
-    acts = [dict(a) for a in c.execute("SELECT * FROM activities WHERE tracker_id=? ORDER BY archived,pos,id", (tid,))]
+    acts = [dict(a) for a in c.execute("SELECT * FROM activities WHERE tracker_id=? AND deleted=0 ORDER BY archived,pos,id", (tid,))]
+    deleted = [dict(a) for a in c.execute("SELECT a.id,a.details,a.archived,COALESCE(SUM(e.milli),0) AS total FROM activities a LEFT JOIN entries e ON e.activity_id=a.id WHERE a.tracker_id=? AND a.deleted=1 GROUP BY a.id ORDER BY a.pos,a.id", (tid,))]
     entries, col, bl = {}, {}, {}
-    for r in c.execute("SELECT e.* FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=? AND e.period_id = ANY(?)", (tid, ids)):
+    for r in c.execute("SELECT e.* FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=? AND a.deleted=0 AND e.period_id = ANY(?)", (tid, ids)):
         entries.setdefault(r["activity_id"], {})[r["period_id"]] = r["milli"]; p = pm[r["period_id"]]
         col[r["period_id"]] = col.get(r["period_id"], 0) + r["milli"]  # archived activities are INCLUDED on purpose: archiving never erases work done
         bl.setdefault(r["activity_id"], {}); bl[r["activity_id"]][p["month_key"]] = bl[r["activity_id"]].get(p["month_key"], 0) + r["milli"]
@@ -329,12 +330,12 @@ def tracker_data(c, t, frm=None, to=None, max_days=800):
     info = {}
     for r in c.execute("SELECT * FROM info WHERE tracker_id=? AND period_id = ANY(?)", (tid, ids)): info.setdefault(r["period_id"], {})[r["kind"]] = r["milli"]
     b = c.execute("""SELECT MIN(p.p_start) AS first, MAX(p.p_end) AS last, COALESCE(SUM(e.milli),0) AS total FROM entries e JOIN activities a ON a.id=e.activity_id
-                     JOIN periods p ON p.id=e.period_id WHERE a.tracker_id=?""", (tid,)).fetchone()
+                     JOIN periods p ON p.id=e.period_id WHERE a.tracker_id=? AND a.deleted=0""", (tid,)).fetchone()
     owner = dict(c.execute("SELECT id,name,email FROM users WHERE id=?", (t["owner_id"],)).fetchone())
     owner.update(affiliation(c, t["owner_id"]))
     used = {r["activity_id"] for r in c.execute("SELECT DISTINCT e.activity_id FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=?", (tid,))}
-    for a in acts: a["has_data"] = a["id"] in used   # any period, visible or not: only activities WITHOUT saved days can be deleted
-    return {"tracker": t, "owner": dict(owner), "periods": periods, "activities": acts, "entries": entries, "info": info, "col_totals": col,
+    for a in acts: a["has_data"] = a["id"] in used
+    return {"tracker": t, "owner": dict(owner), "periods": periods, "activities": acts, "deleted_activities": deleted, "entries": entries, "info": info, "col_totals": col,
             "month_totals": months, "month_complete": complete, "bl": bl, "range": {"from": f.isoformat(), "to": l.isoformat()},
             "bounds": {"first": b["first"], "last": b["last"], "all_total": int(b["total"])}}
 
@@ -356,7 +357,7 @@ def export(tid: int, req: Request, scope: str = "view", frm: str | None = Query(
     with db() as c:
         t = get_tracker(c, tid, u)
         if scope == "all":
-            b = c.execute("SELECT MIN(p.p_start) AS first, MAX(p.p_end) AS last FROM entries e JOIN activities a ON a.id=e.activity_id JOIN periods p ON p.id=e.period_id WHERE a.tracker_id=?", (tid,)).fetchone()
+            b = c.execute("SELECT MIN(p.p_start) AS first, MAX(p.p_end) AS last FROM entries e JOIN activities a ON a.id=e.activity_id JOIN periods p ON p.id=e.period_id WHERE a.tracker_id=? AND a.deleted=0", (tid,)).fetchone()
             starts = [pdate(t["start_date"], "start")] + ([pdate(b["first"], "")] if b["first"] else [])
             ends = [date.today()] + ([pdate(t["end_date"], "end")] if t["end_date"] else []) + ([pdate(b["last"], "")] if b["last"] else [])
             frm, to = month_range(min(starts))[0].isoformat(), month_range(max(ends))[1].isoformat()
@@ -437,7 +438,7 @@ class Arch(BaseModel): archived: bool
 def archive(aid: int, b: Arch, req: Request):
     u = cur_user(req)
     with db() as c:
-        a = c.execute("SELECT * FROM activities WHERE id=?", (aid,)).fetchone()
+        a = c.execute("SELECT * FROM activities WHERE id=? AND deleted=0", (aid,)).fetchone()
         if not a: raise HTTPException(404, "Not found")
         get_tracker(c, a["tracker_id"], u)
         c.execute("UPDATE activities SET archived=? WHERE id=?", (int(b.archived), aid))
@@ -446,19 +447,34 @@ def archive(aid: int, b: Arch, req: Request):
 
 @app.delete("/api/activities/{aid}")
 def delete_activity(aid: int, req: Request):
-    """Permanent deletion is only allowed for activities with NO saved days (e.g. added by mistake). Otherwise: archive (days stay in all totals)."""
+    return change_activity_deleted(aid, req, True)
+
+@app.post("/api/activities/{aid}/undelete")
+def undelete_activity(aid: int, req: Request):
+    return change_activity_deleted(aid, req, False)
+
+def change_activity_deleted(aid, req, deleted):
+    """Serialize deletion/restoration with saves; never erase entries."""
     u = cur_user(req)
     with db() as c:
         a = c.execute("SELECT * FROM activities WHERE id=?", (aid,)).fetchone()
         if not a: raise HTTPException(404, "Not found")
         c.execute("BEGIN")
         try:
-            get_tracker(c, a["tracker_id"], u, lock=True)   # same lock as save(): no day can be saved while we check
-            if not c.execute("SELECT 1 FROM activities WHERE id=?", (aid,)).fetchone(): raise HTTPException(404, "Not found")
-            if c.execute("SELECT 1 FROM entries WHERE activity_id=? LIMIT 1", (aid,)).fetchone():
-                raise HTTPException(409, {"message": "This activity has days entered, so it cannot be deleted. Archive it instead: archiving keeps its days in all totals.", "code": "has_entries"})
-            c.execute("DELETE FROM activities WHERE id=?", (aid,))
-            c.execute(HIST, (uuid.uuid4().hex, a["tracker_id"], u["id"], now(), f"Activity '{a['details'] or aid}' deleted (no days entered)", "", "", aid, None))
+            get_tracker(c, a["tracker_id"], u, lock=True)
+            a = c.execute("SELECT * FROM activities WHERE id=?", (aid,)).fetchone()
+            if not a: raise HTTPException(404, "Not found")
+            if bool(a["deleted"]) != deleted:
+                if not deleted:
+                    exceeded = list(c.execute("""SELECT p.iso_week,p.month_key FROM entries e
+                        JOIN activities a ON a.id=e.activity_id JOIN periods p ON p.id=e.period_id
+                        WHERE a.tracker_id=? AND (a.deleted=0 OR a.id=?)
+                        AND p.id IN (SELECT period_id FROM entries WHERE activity_id=?)
+                        GROUP BY p.id HAVING SUM(e.milli)>p.capacity*1000""", (a["tracker_id"], aid, aid)))
+                    if exceeded:
+                        raise HTTPException(422, "Restoration would exceed weekly capacity: " + ", ".join(f"WK{p['iso_week']} ({p['month_key']})" for p in exceeded) + ". Adjust the recorded days before restoring.")
+                c.execute("UPDATE activities SET deleted=? WHERE id=?", (int(deleted), aid))
+                c.execute(HIST, (uuid.uuid4().hex, a["tracker_id"], u["id"], now(), f"Activity '{a['details'] or aid}' " + ("moved to trash (excluded from totals)" if deleted else "restored from trash (included in totals)"), str(a["deleted"]), str(int(deleted)), aid, None))
             c.execute("COMMIT")
         except BaseException:
             c.execute("ROLLBACK"); raise
@@ -479,7 +495,7 @@ def save(tid: int, b: Save, req: Request):
             for ch in b.changes:
                 kind = ch.get("type")
                 if kind == "cell":
-                    a = c.execute("SELECT * FROM activities WHERE id=? AND tracker_id=?", (ch.get("activity_id"), tid)).fetchone()
+                    a = c.execute("SELECT * FROM activities WHERE id=? AND tracker_id=? AND deleted=0", (ch.get("activity_id"), tid)).fetchone()
                     p = pm.get(ch.get("period_id"))
                     if not a or not p: raise HTTPException(404, "Unknown activity or period")
                     if a["archived"]: raise HTTPException(422, "Archived activities are read-only. Restore the activity to edit it.")
@@ -501,7 +517,7 @@ def save(tid: int, b: Save, req: Request):
                     if new: c.execute("INSERT INTO info VALUES(?,?,?,?)", (tid, p["id"], k, new))
                     wk.add((p["iso_year"], p["iso_week"])); log.append((f"{'Leave' if k == 'leave' else 'PH holidays'} · WK{p['iso_week']} ({p['month_key']})", curv / 1000, new / 1000, None, p["id"]))
                 elif kind == "field":
-                    a = c.execute("SELECT * FROM activities WHERE id=? AND tracker_id=?", (ch.get("activity_id"), tid)).fetchone(); f = ch.get("field")
+                    a = c.execute("SELECT * FROM activities WHERE id=? AND tracker_id=? AND deleted=0", (ch.get("activity_id"), tid)).fetchone(); f = ch.get("field")
                     if not a or f not in FIELDS: raise HTTPException(404, "Unknown activity or field")
                     new = str(ch.get("new", "")).strip()
                     if f == "progress":
@@ -514,7 +530,7 @@ def save(tid: int, b: Save, req: Request):
             if conflicts: raise HTTPException(409, {"message": "Some values were changed by someone else since you loaded the page.", "conflicts": conflicts})
             bad = []
             for pid in touched:  # capacity is checked on the COLUMN total (all activities, archived included), after applying changes
-                tot = c.execute("SELECT COALESCE(SUM(e.milli),0) AS v FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=? AND e.period_id=?", (tid, pid)).fetchone()["v"]
+                tot = c.execute("SELECT COALESCE(SUM(e.milli),0) AS v FROM entries e JOIN activities a ON a.id=e.activity_id WHERE a.tracker_id=? AND a.deleted=0 AND e.period_id=?", (tid, pid)).fetchone()["v"]
                 if tot > pm[pid]["capacity"] * 1000: bad.append(f"{pm[pid]['month_key']} WK{pm[pid]['iso_week']}: {tot/1000:g} days entered, only {pm[pid]['capacity']} available")
             if bad: raise HTTPException(422, {"message": "Capacity exceeded — " + "; ".join(bad), "capacity": bad})
             for w_, o, n, aid, pid in log: c.execute(HIST, (batch, tid, u["id"], now(), w_, sv(o), sv(n), aid, pid))

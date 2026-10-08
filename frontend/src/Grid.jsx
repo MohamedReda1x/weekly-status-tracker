@@ -113,9 +113,9 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
           <button className="icon-action" aria-label={a.archived ? 'Restore' : 'Archive'} disabled={actionsLocked || rowDirty}
             title={rowDirty ? 'Save or discard changes to this activity first' : a.archived ? 'Restore editing for this activity' : 'Archive: stop editing, keep all saved days and totals'}
             onClick={() => run(async () => { if (!a.archived && !confirm('Archive this activity? It becomes read-only. All saved days and totals are kept. You can restore it later.')) return; await api(`/activities/${a.id}/archive`, { method: 'POST', body: { archived: !a.archived } }); setMsg(a.archived ? 'Activity restored. Editing is available again.' : 'Activity archived. Saved days and totals are kept.'); setErr(''); await reload() })}><GridIcon name={a.archived ? 'restore' : 'archive'} /></button>
-          <button className="icon-action danger" aria-label="Delete" disabled={actionsLocked || rowDirty || !!a.has_data}
-            title={a.has_data ? 'Saved days exist in this activity (possibly in another period). Use Archive to keep its history and totals.' : rowDirty ? 'Save or discard changes to this activity first' : 'Delete permanently: only activities without saved days'}
-            onClick={() => run(async () => { if (!confirm('Delete this empty activity permanently? This cannot be undone.')) return; await api(`/activities/${a.id}`, { method: 'DELETE' }); dropPending(a.id); setMsg('Activity deleted.'); setErr(''); await reload() })}><GridIcon name="delete" /></button>
+          <button className="icon-action danger" aria-label="Delete" disabled={actionsLocked || rowDirty}
+            title={rowDirty ? 'Save or discard changes to this activity first' : 'Move to trash: hide this activity and exclude its days from all totals. It can be restored.'}
+            onClick={() => run(async () => { if (!confirm('Move this activity to trash? Its days will be excluded from all totals and Excel exports, including earlier periods. You can restore it from Trash.')) return; await api(`/activities/${a.id}`, { method: 'DELETE' }); dropPending(a.id); setMsg('Activity moved to trash. Its days are excluded from totals.'); setErr(''); await reload() })}><GridIcon name="delete" /></button>
         </div></td>
         {P.map((p, ci) => { const k = `c:${a.id}:${p.id}`, old = (T.entries[a.id] || {})[p.id] || 0, off = !!a.archived
           return <td key={p.id} className={`n wk ${pending[k] ? 'dirty' : ''} ${conf[k] ? 'conf' : ''} ${off ? 'off' : ''} `}><input inputMode="decimal" data-r={ri} data-c={ci} onKeyDown={e => nav(e, ri, ci)} onPaste={e => paste(e, ri, ci)} aria-label={`days-${a.id}-${p.id}`} value={eff(a.id, p.id)} disabled={off} onChange={e => edit(k, { type: 'cell', activity_id: a.id, period_id: p.id, pid: p.id, old, raw: e.target.value })} /></td> })}</tr> })}</tbody>
@@ -124,7 +124,13 @@ export default function Grid({ T, pending, conf, edit, mgr, colTotal, setErr, se
           {P.map(p => { const v = colTotal(p.id), cap = p.capacity * 1000; return <td key={p.id} data-testid={`ct-${p.id}`} className={'calc' + (v > cap ? ' over' : v === cap ? ' full' : '')}>{fmt(v) || '0'}</td> })}</tr>
         <tr><td className="lab stl" colSpan={2}>Monthwise (in days) :</td><td colSpan={5} />{G.map(g => <td key={g.k} colSpan={g.n} data-testid={`mt-${g.k}`} className="calc"><span className="mh">{fmt(mtot(g.k)) || '0'}{T.month_complete[g.k] ? '' : ' *'}</span></td>)}</tr></tfoot></table></div>
     <p className="note"><button disabled={busy} onClick={() => run(async () => { await api(`/trackers/${sel}/activities`, { method: 'POST' }); await reload() })}>+ Add activity</button>
-      <small> Totals cover the periods shown ({T.range.from} → {T.range.to}), all activities including archived ones.{hasMonthPartial ? ' * = month only partly shown.' : ''}</small></p>
+      <small> Totals cover the periods shown ({T.range.from} → {T.range.to}), including archived activities and excluding Trash.{hasMonthPartial ? ' * = month only partly shown.' : ''}</small></p>
+    <details className="activity-trash"><summary>Trash ({(T.deleted_activities || []).length})</summary>
+      <p className="hint">Deleted activities do not count in any totals or Excel exports. Restoring adds their saved days back. Save or discard grid edits before restoring.</p>
+      {(T.deleted_activities || []).length ? <ul>{T.deleted_activities.map(a => <li key={a.id}><span><b>{a.details || '(untitled)'}</b> · {fmt(a.total) || '0'} saved days{a.archived ? ' · archived' : ''}</span>
+        <button aria-label={'Restore deleted activity ' + a.id} disabled={actionsLocked || Object.keys(pending).length > 0} onClick={() => run(async () => { if (!confirm('Restore this activity and include its saved days in the totals again?')) return; await api(`/activities/${a.id}/undelete`, { method: 'POST' }); setErr(''); setMsg('Activity restored from trash. Its days count in totals again.'); await reload() })}>Restore activity</button>
+      </li>)}</ul> : <p className="hint">Trash is empty.</p>}
+    </details>
   </div>
 }
 

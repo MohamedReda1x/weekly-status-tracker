@@ -267,5 +267,110 @@ class SecurityTests(unittest.TestCase):
         statements = [call.args[0].strip().upper() for call in execute.call_args_list]
         self.assertFalse(any(s.startswith(("DELETE ", "DROP ", "TRUNCATE ")) for s in statements))
 
+
+    def test_recoverable_deletion_and_restoration_keep_entries_and_history(self):
+        activity = dict(id=7, tracker_id=1, details="Populated", deleted=0, archived=0)
+        def execute(sql, params=()):
+            result = MagicMock()
+            if sql.startswith("SELECT * FROM activities"): result.fetchone.return_value = dict(activity)
+            elif sql.startswith("UPDATE activities SET deleted"): activity["deleted"] = params[0]
+            elif sql.startswith("SELECT p.iso_week"): result.__iter__.return_value = iter([])
+            return result
+        self.sql.execute.side_effect = execute
+        with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker") as tracker:
+            app.delete_activity(7, Request({"type": "http"}))
+            self.assertEqual(activity["deleted"], 1)
+            app.delete_activity(7, Request({"type": "http"}))  # idempotent
+            app.undelete_activity(7, Request({"type": "http"}))
+            self.assertEqual(activity["deleted"], 0)
+        statements = [call.args[0] for call in self.sql.execute.call_args_list]
+        self.assertEqual(sum(s.startswith("INSERT INTO history") for s in statements), 2)
+        self.assertFalse(any(s.startswith("DELETE FROM") for s in statements))
+        self.assertEqual(sum(s == "COMMIT" for s in statements), 3)
+        self.assertTrue(all(call.kwargs.get("lock") for call in tracker.call_args_list))
+
+    def test_trash_restoration_over_capacity_rolls_back(self):
+        def execute(sql, params=()):
+            result = MagicMock()
+            result.fetchone.return_value = dict(id=7, tracker_id=1, details="Old", deleted=1)
+            if sql.startswith("SELECT p.iso_week"):
+                result.__iter__.return_value = iter([dict(iso_week=41, month_key="2026-10")])
+            return result
+        self.sql.execute.side_effect = execute
+        with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker"):
+            with self.assertRaises(HTTPException) as error:
+                app.undelete_activity(7, Request({"type": "http"}))
+        self.assertEqual(error.exception.status_code, 422)
+        statements = [call.args[0] for call in self.sql.execute.call_args_list]
+        self.assertIn("ROLLBACK", statements)
+        self.assertFalse(any(s.startswith("UPDATE") for s in statements))
+
+    def test_other_employee_cannot_delete_or_restore(self):
+        def execute(sql, params=()):
+            result = MagicMock()
+            result.fetchone.return_value = dict(id=7, tracker_id=1, owner_id=2, deleted=0)
+            return result
+        self.sql.execute.side_effect = execute
+        with patch.object(app, "cur_user", return_value={"id": 1, "role": "employee"}):
+            for action in (app.delete_activity, app.undelete_activity):
+                with self.assertRaises(HTTPException) as error: action(7, Request({"type": "http"}))
+                self.assertEqual(error.exception.status_code, 404)
+        self.assertFalse(any(call.args[0].startswith("UPDATE") for call in self.sql.execute.call_args_list))
+
+    def test_deleted_work_is_excluded_from_tracker_and_excel_totals(self):
+        import io
+        from datetime import date
+        from openpyxl import load_workbook
+        from export_xlsx import build
+        period = dict(id=1, start="2026-10-05", end="2026-10-09", month_key="2026-10", iso_year=2026, iso_week=41, capacity=5)
+        active = dict(id=7, tracker_id=1, details="Kept archived", archived=1, status="Completed",
+                      affected="", deliverables="", estimation="", progress=60, pos=1, deleted=0)
+        deleted = dict(id=8, details="Removed", archived=0, total=1500)
+        def execute(sql, params=()):
+            result = MagicMock()
+            rows = []
+            if sql.startswith("SELECT " + app.PSEL): rows = [period]
+            elif sql.startswith("SELECT * FROM activities WHERE tracker_id"):
+                rows = [active] + ([] if "deleted=0" in sql else [deleted])
+            elif sql.startswith("SELECT a.id,a.details"): rows = [deleted]
+            elif sql.startswith("SELECT e.*"):
+                rows = [dict(activity_id=7, period_id=1, milli=500)]
+                if "a.deleted=0" not in sql: rows.append(dict(activity_id=8, period_id=1, milli=1500))
+            elif sql.startswith("SELECT MIN"):
+                result.fetchone.return_value = dict(first=period["start"], last=period["end"], total=500 if "a.deleted=0" in sql else 2000)
+            elif sql.startswith("SELECT id,name,email"): result.fetchone.return_value = dict(id=1, name="Demo", email="demo@example.org")
+            result.__iter__.return_value = iter(rows)
+            return result
+        self.sql.execute.side_effect = execute
+        tracker = dict(id=1, owner_id=1, work_package="", start_date="2026-01-01", end_date=None)
+        with patch.object(app, "resolve_range", return_value=(date(2026,10,1), date(2026,10,31))), patch.object(app, "affiliation", return_value={}):
+            data = app.tracker_data(self.sql, tracker)
+        self.assertEqual(data["col_totals"], {1: 500})
+        self.assertEqual(data["month_totals"], {"2026-10": 500})
+        self.assertEqual(data["bounds"]["all_total"], 500)
+        self.assertEqual([a["id"] for a in data["activities"]], [7])
+        self.assertEqual(data["deleted_activities"], [deleted])
+        wb = load_workbook(io.BytesIO(build({**data, "comments": []})))
+        values = [c.value for row in wb["Weekly Status"] for c in row]
+        self.assertIn("Kept archived (archived)", values)
+        self.assertNotIn("Removed", values)
+        self.assertEqual(wb["Monthly BL"].cell(3, 3).value, 0.5)
+
+    def test_stale_save_cannot_edit_deleted_activity(self):
+        for kind in ("cell", "field"):
+            def execute(sql, params=()):
+                result = MagicMock()
+                result.fetchone.return_value = None
+                if sql.startswith("SELECT " + app.PSEL):
+                    result.__iter__.return_value = iter([dict(id=1)])
+                return result
+            self.sql.execute.side_effect = execute
+            with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker"):
+                with self.assertRaises(HTTPException) as error:
+                    app.save(1, app.Save(changes=[dict(type=kind, activity_id=7, period_id=1, field="details", new="changed")]), Request({"type":"http"}))
+            self.assertEqual(error.exception.status_code, 404)
+        queries = [call.args[0] for call in self.sql.execute.call_args_list if call.args[0].startswith("SELECT * FROM activities")]
+        self.assertTrue(all("deleted=0" in sql for sql in queries))
+
 if __name__ == "__main__":
     unittest.main()

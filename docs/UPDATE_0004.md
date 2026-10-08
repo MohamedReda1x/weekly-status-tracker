@@ -1,5 +1,9 @@
 # Mise à jour 0004 : présentation, affiliations et dates de congé
 
+La mise à jour 0005 remplace la règle de suppression décrite ici :
+Delete accepte désormais les activités renseignées et les place dans Trash,
+avec leurs jours exclus des totaux. Lire UPDATE_0005.md pour ce déploiement.
+
 Cette mise à jour est préparée dans les fichiers. Aucune migration ni écriture
 sur une base réelle n'a été exécutée pendant sa préparation.
 
