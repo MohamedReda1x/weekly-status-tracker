@@ -122,3 +122,47 @@ it('removes the repeated interval label in Date range mode', async () => {
   await screen.findByLabelText('Range from')
   expect(screen.queryByTestId('period-label')).toBeNull()
 })
+
+it('keeps a single profile selector with its filters and excludes inactive accounts', async () => {
+  const users = [{ id: 1, name: 'Mark', role: 'employee', active: 1, tracker_id: 1 },
+    { id: 2, name: 'Inactive', role: 'employee', active: 0, tracker_id: 2 }]
+  const T = { tracker: { id: 1, start_date: '2026-01-01' }, owner: users[0], activities: [], periods: [],
+    entries: {}, info: {}, col_totals: {}, month_totals: {}, month_complete: {}, bounds: { all_total: 0 },
+    range: { from: '2026-10-01', to: '2026-10-31' } }
+  vi.stubGlobal('fetch', vi.fn(async url => ({ ok: true, json: async () =>
+    url === '/api/me' ? { id: 3, role: 'admin', email: 'boss@example.org' } : url === '/api/users' ? users : T })))
+  render(<App />)
+  const picker = await screen.findByLabelText('Employee')
+  expect(screen.getAllByLabelText('Employee').length).toBe(1)
+  expect(picker.closest('header')).toBeNull()
+  expect(picker.closest('[aria-label="Filter employees by affiliation"]')).toBeTruthy()
+  expect(picker.querySelectorAll('option').length).toBe(1)
+  expect(screen.getByRole('button', { name: 'Previous employee' }).disabled).toBe(true)
+  expect(screen.getByRole('button', { name: 'Next employee' }).disabled).toBe(true)
+})
+it.each(['deactivate', 'delete'])('refreshes the selected profile after account %s', async action => {
+  let users = [{ id: 1, name: 'Mark', email: 'mark@example.org', role: 'employee', active: 1, tracker_id: 1 }]
+  const T = { tracker: { id: 1, start_date: '2026-01-01' }, owner: users[0], activities: [], periods: [],
+    entries: {}, info: {}, col_totals: {}, month_totals: {}, month_complete: {}, bounds: { all_total: 0 },
+    range: { from: '2026-10-01', to: '2026-10-31' } }
+  vi.stubGlobal('confirm', () => true)
+  vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => ({ ok: true, json: async () => {
+    if (url === '/api/me') return { id: 3, role: 'admin', email: 'boss@example.org' }
+    if (url === '/api/users') return users
+    if (url === '/api/affiliations') return { trades: [], roles: [], clients: [] }
+    if (url === '/api/emails') return []
+    if (options.method === 'DELETE' || url.endsWith('/active')) {
+      users = action === 'delete' ? [] : users.map(u => ({ ...u, active: 0 }))
+      return { ok: true }
+    }
+    return T
+  } })))
+  render(<App />)
+  await screen.findByLabelText('Employee affiliation')
+  fireEvent.click(await screen.findByRole('button', { name: 'Accounts' }))
+  fireEvent.click(await screen.findByRole('button', { name: action === 'delete' ? 'Delete account' : 'active-mark@example.org' }))
+  await screen.findByText(action === 'delete' ? 'Account and its data permanently deleted.' : 'Account deactivated. Access revoked; data kept.')
+  fireEvent.click(screen.getByRole('button', { name: 'Tracker' }))
+  await screen.findByText('No active employee')
+  expect(screen.queryByLabelText('Employee affiliation')).toBeNull()
+})

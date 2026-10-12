@@ -1,5 +1,9 @@
 # Déployer Weekly Process Status Report sur Railway
 
+Pour la mise à jour courante (statuts et suppressions définitives), suivre
+UPDATE_0006.md. Le Dockerfile applique désormais le schéma jusqu'à 0006.
+Les anciennes consignes de suppression récupérable de 0005 sont remplacées.
+
 Ce guide déploie une base Railway neuve et indépendante. Il ne transfère
 pas les données locales. Ne pas lancer seed.py, start-local.ps1 ni les scripts
 locaux de restauration pour ce déploiement. Ne pas modifier .env.
@@ -56,7 +60,7 @@ Laisser Railway injecter PORT et utiliser ce port comme port cible du domaine.
 
 La validation HTTPS/mot de passe intervient au démarrage FastAPI, avant init().
 Les migrations s'exécutent auparavant, conformément au CMD du Dockerfile.
-Sur une base neuve, les migrations créent le schéma jusqu'à 0005 ; init()
+Sur une base neuve, les migrations créent le schéma jusqu'à 0006 ; init()
 crée le calendrier et le premier administrateur si users est vide.
 Modifier ADMIN_PASSWORD ensuite ne change pas le mot de passe d'un compte
 déjà créé : utiliser le changement de mot de passe dans l'application.

@@ -76,7 +76,17 @@ function Shell({ me, onOut }) {
     finally { setLoading(false) }
   }, [])
   const refreshUsers = async () => { const u = await api('/users'); setUsers(u); return u }
-  useEffect(() => { (async () => { try { if (mgr) { const u = await refreshUsers(); const f = u.find(x => x.role === 'employee' && x.tracker_id); if (f) { setSel(f.tracker_id); await load(f.tracker_id, view) } else setLoading(false) } else await load(me.tracker_id, view) } catch (e) { if (e.status === 401) onOut(); else { setErr(e.message); setLoading(false) } } })() }, [])
+  const refreshAccounts = async () => {
+    const u = await refreshUsers()
+    const candidates = u.filter(x => x.role === 'employee' && x.tracker_id && x.active !== 0 && x.active !== false && matchesAffiliation(x, affFilters))
+    if (!candidates.some(x => x.tracker_id === +sel)) {
+      const next = candidates[0]?.tracker_id || null
+      setSel(next); setT(null); setPending({}); setConf({}); setComment('')
+      if (next) await load(next, view)
+    }
+    return u
+  }
+  useEffect(() => { (async () => { try { if (mgr) { const u = await refreshUsers(); const f = u.find(x => x.role === 'employee' && x.tracker_id && x.active !== 0 && x.active !== false); if (f) { setSel(f.tracker_id); await load(f.tracker_id, view) } else setLoading(false) } else await load(me.tracker_id, view) } catch (e) { if (e.status === 401) onOut(); else { setErr(e.message); setLoading(false) } } })() }, [])
   useEffect(() => { if (!dirty) return; const f = e => { e.preventDefault(); e.returnValue = '' }; window.addEventListener('beforeunload', f); return () => window.removeEventListener('beforeunload', f) }, [dirty])
 
   // ---- unsaved changes guard: Save / Discard / Cancel before anything that would drop the pending cells
@@ -119,7 +129,7 @@ function Shell({ me, onOut }) {
     } catch (e) { setExp(x => ({ ...x, busy: false, error: e.message })) }
   }
 
-  const allEmployees = (users || []).filter(u => u.tracker_id && u.role === 'employee')
+  const allEmployees = (users || []).filter(u => u.tracker_id && u.role === 'employee' && u.active !== 0 && u.active !== false)
   const matchesAffiliation = (u, filters) => Object.entries(filters).every(([key, value]) => !value || String(u[key]) === value)
   const employees = allEmployees.filter(u => matchesAffiliation(u, affFilters)), ids = employees.map(u => u.tracker_id), idx = ids.indexOf(+sel)
   const filterOptions = (key, name) => [...new Map(allEmployees.filter(u => u[key] && (key !== 'professional_role_id' || !affFilters.trade_id || String(u.trade_id) === affFilters.trade_id)).map(u => [u[key], { id: u[key], name: u[name] }])).values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -138,9 +148,6 @@ function Shell({ me, onOut }) {
 
   return <div className="app">
     <header><img className="brand-logo" src={segulaLogo} alt="SEGULA Technologies" /><h1>Weekly Status</h1>
-      {mgr && !empty && <span className="picker"><button aria-label="Previous employee" onClick={() => idx > 0 && pickEmployee(ids[idx - 1])}>‹</button>
-        <select aria-label="Employee" value={sel || ''} onChange={e => pickEmployee(e.target.value)}>{employees.map(u => <option key={u.id} value={u.tracker_id}>{u.name}</option>)}</select>
-        <button aria-label="Next employee" onClick={() => idx < ids.length - 1 && pickEmployee(ids[idx + 1])}>›</button></span>}
       {!mgr && <b className="who">{me.name}</b>}
       {T && !empty && <span className="period" aria-label="Period navigation">
         <button disabled={view.mode === 'custom'} onClick={() => goView({ ...view, anchor: shiftAnchor(view.anchor, view.mode === 'quarter' ? -3 : -1) })}>Previous</button>
@@ -155,27 +162,31 @@ function Shell({ me, onOut }) {
       <details className="user"><summary>{me.email}</summary><button onClick={() => guard(onOut)}>Sign out</button></details></header>
     {T && !empty && <nav>{nav.map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => {
       const changeTab = () => { setTab(k); setErr(''); setMsg(''); if (k === 'acc') refreshUsers().catch(e => setErr(e.message)); if (tab === 'acc') load(sel, view, true) }
-      if (k === 'leave') guard(changeTab); else changeTab()
+      if (k === 'leave' || k === 'acc') guard(changeTab); else changeTab()
     }}>{l}</button>)}</nav>}
     {(!T || empty) && mgr && <nav><button className={tab !== 'acc' ? 'on' : ''} onClick={() => setTab('grid')}>Tracker</button><button className={tab === 'acc' ? 'on' : ''} onClick={() => setTab('acc')}>Accounts</button></nav>}
     <main>
       <Err onRetry={loadFail}>{err}</Err><Ok>{msg}</Ok>
-      {mgr && allEmployees.length > 0 && <section className="affiliation-filters" aria-label="Filter employees by affiliation">
-        <b>Filter employees</b>
+      {mgr && tab !== 'acc' && allEmployees.length > 0 && <section className="affiliation-filters" aria-label="Filter employees by affiliation">
+        <div className="employee-selection"><label>Employee profile
+          <span className="picker"><button aria-label="Previous employee" disabled={loading || saving || idx <= 0} onClick={() => pickEmployee(ids[idx - 1])}>‹</button>
+            <select aria-label="Employee" disabled={loading || saving || !employees.length} value={sel || ''} onChange={e => pickEmployee(e.target.value)}>{!employees.length && <option value="">No matching employee</option>}{employees.map(u => <option key={u.id} value={u.tracker_id}>{u.name}</option>)}</select>
+            <button aria-label="Next employee" disabled={loading || saving || idx < 0 || idx >= ids.length - 1} onClick={() => pickEmployee(ids[idx + 1])}>›</button>
+          </span></label><small>{employees.length} / {allEmployees.length} employees</small></div>
         {[['trade_id', 'Trade', 'trade_name'], ['professional_role_id', 'Professional role', 'professional_role_name'], ['client_id', 'Client', 'client_name']].map(([key, label, name]) => <label key={key}>{label}
           <select aria-label={'Filter ' + label} disabled={loading || saving} value={affFilters[key]} onChange={e => changeAffFilters({ ...affFilters, [key]: e.target.value, ...(key === 'trade_id' ? { professional_role_id: '' } : {}) })}>
             <option value="">All</option>{filterOptions(key, name).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
           </select>
         </label>)}
-        <span>{employees.length} / {allEmployees.length} employees</span>
+
         <button disabled={loading || saving} onClick={() => changeAffFilters({ trade_id: '', professional_role_id: '', client_id: '' })}>Reset filters</button>
       </section>}
-      {T && !empty && tab !== 'acc' && <div className="affiliation-banner" aria-label="Employee affiliation"><div className="affiliation-person"><small>Employee</small><b>{T.owner.name}</b></div>
+      {T && !empty && tab !== 'acc' && <div className={'affiliation-banner' + (mgr ? ' manager-affiliation' : '')} aria-label="Employee affiliation">{!mgr && <div className="affiliation-person"><small>Employee</small><b>{T.owner.name}</b></div>}
         <div><small>Trade</small><strong>{T.owner.trade_name || 'Not assigned'}</strong></div><div><small>Professional role</small><strong>{T.owner.professional_role_name || 'Not assigned'}</strong></div><div><small>Client</small><strong>{T.owner.client_name || 'Not assigned'}</strong></div>
       </div>}
       {loading && !T && <div className="center" role="status">Loading tracker…</div>}
-      {tab === 'acc' && mgr && <Accounts me={me} users={users || []} refresh={refreshUsers} setErr={setErr} setMsg={setMsg} />}
-      {tab !== 'acc' && empty && <div className="card empty"><h2>No employee yet</h2><p>Create an account for each team member. Each employee gets one tracker and sees only their own.</p><button className="p" onClick={() => setTab('acc')}>Create employee</button></div>}
+      {tab === 'acc' && mgr && <Accounts me={me} users={users || []} refresh={refreshAccounts} setErr={setErr} setMsg={setMsg} />}
+      {tab !== 'acc' && empty && <div className="card empty"><h2>No active employee</h2><p>Create an employee account or reactivate an existing one in Accounts.</p><button className="p" onClick={() => setTab('acc')}>Manage accounts</button></div>}
       {tab !== 'acc' && !empty && !T && !loading && !err && <div className="card empty"><h2>{mgr && !employees.length ? 'No employee matches these filters' : 'No tracker available'}</h2><p>{mgr ? 'Adjust the affiliation filters or select an employee.' : 'Ask your manager to check your account.'}</p></div>}
       {T && !empty && tab === 'grid' && (narrow ? <MobileList T={T} /> : <Grid {...{ T, pending, conf, edit, editBatch, endEdit: endGroup, undo, redo, canUndo, canRedo, historyDisabled: saving || !!dlg || !!exp, mgr, colTotal, setErr, setMsg, sel, loading, reload: () => load(sel, view, true), dropPending: aid => setPending(P => Object.fromEntries(Object.entries(P).filter(([, q]) => q.activity_id !== aid))), onMission: () => load(sel, view, true) }} />)}
       {T && !empty && tab === 'grid' && <section className="weekly-comment" aria-label="Weekly commentary">

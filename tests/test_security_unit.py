@@ -268,54 +268,91 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(any(s.startswith(("DELETE ", "DROP ", "TRUNCATE ")) for s in statements))
 
 
-    def test_recoverable_deletion_and_restoration_keep_entries_and_history(self):
-        activity = dict(id=7, tracker_id=1, details="Populated", deleted=0, archived=0)
-        def execute(sql, params=()):
-            result = MagicMock()
-            if sql.startswith("SELECT * FROM activities"): result.fetchone.return_value = dict(activity)
-            elif sql.startswith("UPDATE activities SET deleted"): activity["deleted"] = params[0]
-            elif sql.startswith("SELECT p.iso_week"): result.__iter__.return_value = iter([])
-            return result
-        self.sql.execute.side_effect = execute
+    def test_migration_0006_changes_only_status_constraint(self):
+        import runpy
+        from pathlib import Path
+        from alembic import op
+        with patch.object(op, "execute") as execute:
+            migration = runpy.run_path(str(Path(app.ROOT) / "migrations" / "versions" / "0006_activity_statuses.py"))
+            self.assertEqual(migration["down_revision"], "0005")
+            migration["upgrade"]()
+        statements = [call.args[0] for call in execute.call_args_list]
+        self.assertEqual(len(statements), 2)
+        self.assertTrue(all(sql.startswith("ALTER TABLE activities") for sql in statements))
+        self.assertIn("'Not started','Stand-by'", statements[1])
+
+    def test_permanent_activity_deletion_is_locked_and_atomic(self):
+        self.sql.execute.return_value.fetchone.return_value = dict(id=7, tracker_id=1)
         with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker") as tracker:
-            app.delete_activity(7, Request({"type": "http"}))
-            self.assertEqual(activity["deleted"], 1)
-            app.delete_activity(7, Request({"type": "http"}))  # idempotent
-            app.undelete_activity(7, Request({"type": "http"}))
-            self.assertEqual(activity["deleted"], 0)
-        statements = [call.args[0] for call in self.sql.execute.call_args_list]
-        self.assertEqual(sum(s.startswith("INSERT INTO history") for s in statements), 2)
-        self.assertFalse(any(s.startswith("DELETE FROM") for s in statements))
-        self.assertEqual(sum(s == "COMMIT" for s in statements), 3)
-        self.assertTrue(all(call.kwargs.get("lock") for call in tracker.call_args_list))
+            self.assertEqual(app.delete_activity(7, Request({"type": "http"})), {"ok": True})
+        tracker.assert_called_once_with(self.sql, 1, {"id": 1}, lock=True)
+        statements = [c.args[0] for c in self.sql.execute.call_args_list]
+        self.assertIn("DELETE FROM activities WHERE id=?", statements)
+        self.assertIn("DELETE FROM history WHERE activity_id=? AND tracker_id=?", statements)
+        self.assertIn("COMMIT", statements)
+        self.assertEqual(self.client.post("/api/activities/7/undelete").status_code, 404)
 
-    def test_trash_restoration_over_capacity_rolls_back(self):
-        def execute(sql, params=()):
-            result = MagicMock()
-            result.fetchone.return_value = dict(id=7, tracker_id=1, details="Old", deleted=1)
-            if sql.startswith("SELECT p.iso_week"):
-                result.__iter__.return_value = iter([dict(iso_week=41, month_key="2026-10")])
-            return result
-        self.sql.execute.side_effect = execute
-        with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker"):
-            with self.assertRaises(HTTPException) as error:
-                app.undelete_activity(7, Request({"type": "http"}))
-        self.assertEqual(error.exception.status_code, 422)
-        statements = [call.args[0] for call in self.sql.execute.call_args_list]
-        self.assertIn("ROLLBACK", statements)
-        self.assertFalse(any(s.startswith("UPDATE") for s in statements))
-
-    def test_other_employee_cannot_delete_or_restore(self):
-        def execute(sql, params=()):
-            result = MagicMock()
-            result.fetchone.return_value = dict(id=7, tracker_id=1, owner_id=2, deleted=0)
-            return result
-        self.sql.execute.side_effect = execute
+    def test_activity_deletion_cannot_cross_employees(self):
+        self.sql.execute.return_value.fetchone.return_value = dict(id=7, tracker_id=1, owner_id=2)
         with patch.object(app, "cur_user", return_value={"id": 1, "role": "employee"}):
-            for action in (app.delete_activity, app.undelete_activity):
-                with self.assertRaises(HTTPException) as error: action(7, Request({"type": "http"}))
-                self.assertEqual(error.exception.status_code, 404)
-        self.assertFalse(any(call.args[0].startswith("UPDATE") for call in self.sql.execute.call_args_list))
+            with self.assertRaises(HTTPException) as error: app.delete_activity(7, Request({"type": "http"}))
+        self.assertEqual(error.exception.status_code, 404)
+        statements = [c.args[0] for c in self.sql.execute.call_args_list]
+        self.assertIn("ROLLBACK", statements)
+        self.assertFalse(any(s.startswith("DELETE") for s in statements))
+
+    def test_account_deactivation_revokes_sessions_and_tokens_without_data_deletion(self):
+        self.sql.execute.return_value.fetchone.return_value = {"id": 2}
+        with patch.object(app, "admin_only", return_value={"id": 1}):
+            app.set_active(2, app.Active(active=False), Request({"type": "http"}))
+        self.sql.execute.assert_any_call("UPDATE users SET active=? WHERE id=?", (0, 2))
+        self.sql.execute.assert_any_call("DELETE FROM sessions WHERE user_id=?", (2,))
+        self.sql.execute.assert_any_call("UPDATE tokens SET used=1 WHERE user_id=? AND used=0", (2,))
+        self.assertFalse(any(c.args[0].startswith("DELETE FROM trackers") for c in self.sql.execute.call_args_list))
+
+    def test_deleted_and_deactivated_accounts_cannot_authenticate(self):
+        self.sql.execute.return_value.fetchone.return_value = dict(id=2, active=0, pw="stored")
+        with patch.object(app, "check_pw", return_value=True):
+            self.assertEqual(self.attempt("disabled@example.org").status_code, 401)
+        self.sql.execute.return_value.fetchone.return_value = None
+        self.assertEqual(self.client.get("/api/me", cookies={"sid": "revoked"}).status_code, 401)
+
+    def test_account_deletion_is_admin_only_and_protects_managers(self):
+        with patch.object(app, "cur_user", return_value={"id": 2, "role": "employee"}):
+            self.assertEqual(self.client.delete("/api/users/3").status_code, 403)
+        with patch.object(app, "admin_only", return_value={"id": 1}):
+            self.assertEqual(self.client.delete("/api/users/1").status_code, 422)
+            self.sql.execute.return_value.fetchone.return_value = {"id": 3, "role": "admin"}
+            self.assertEqual(self.client.delete("/api/users/3").status_code, 422)
+        self.assertFalse(any(c.args[0].startswith("DELETE") for c in self.sql.execute.call_args_list))
+
+    def test_account_deletion_removes_owned_data_and_rolls_back_on_failure(self):
+        self.sql.execute.return_value.fetchone.return_value = {"id": 2, "role": "employee"}
+        with patch.object(app, "admin_only", return_value={"id": 1}):
+            self.assertEqual(self.client.delete("/api/users/2").status_code, 200)
+        for table, key in (("comments","author_id"), ("history","author_id"), ("emails","user_id"), ("trackers","owner_id"), ("users","id")):
+            self.sql.execute.assert_any_call(f"DELETE FROM {table} WHERE {key}=?", (2,))
+        def fail(sql, params=()):
+            if sql.startswith("DELETE FROM users"): raise RuntimeError("failed deletion")
+            return self.sql.execute.return_value
+        self.sql.execute.reset_mock(); self.sql.execute.side_effect = fail
+        with patch.object(app, "admin_only", return_value={"id": 1}):
+            with self.assertRaises(RuntimeError): app.delete_user(2, Request({"type": "http"}))
+        self.sql.execute.assert_any_call("ROLLBACK")
+
+    def test_new_statuses_save_and_unknown_status_rolls_back(self):
+        for status in ("Not started", "Stand-by", "unknown"):
+            self.sql.execute.reset_mock()
+            self.sql.execute.return_value.fetchone.return_value = dict(id=7, archived=0, details="Review", status="WIP")
+            with patch.object(app, "cur_user", return_value={"id": 1}), patch.object(app, "get_tracker", return_value={}):
+                batch = app.Save(changes=[dict(type="field", activity_id=7, field="status", old="WIP", new=status)])
+                if status == "unknown":
+                    with self.assertRaises(HTTPException) as error: app.save(1, batch, Request({"type": "http"}))
+                    self.assertEqual(error.exception.status_code, 422)
+                    self.sql.execute.assert_any_call("ROLLBACK")
+                else:
+                    self.assertEqual(app.save(1, batch, Request({"type": "http"}))["changes"], 1)
+                    self.sql.execute.assert_any_call("UPDATE activities SET status=? WHERE id=?", (status, 7))
 
     def test_deleted_work_is_excluded_from_tracker_and_excel_totals(self):
         import io
@@ -355,6 +392,12 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Kept archived (archived)", values)
         self.assertNotIn("Removed", values)
         self.assertEqual(wb["Monthly BL"].cell(3, 3).value, 0.5)
+        from export_xlsx import STATUS_FILLS
+        for status in ("Not started", "Stand-by"):
+            data["activities"][0]["status"] = status
+            export = load_workbook(io.BytesIO(build({**data, "comments": []})))
+            self.assertEqual(export["Weekly Status"].cell(12, 2).value, status)
+            self.assertEqual(export["Weekly Status"].cell(12, 2).fill.fgColor.rgb, STATUS_FILLS[status].fgColor.rgb)
 
     def test_stale_save_cannot_edit_deleted_activity(self):
         for kind in ("cell", "field"):

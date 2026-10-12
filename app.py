@@ -275,6 +275,7 @@ def resend(uid: int, req: Request):
     with db() as c:
         u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         if not u: raise HTTPException(404, "Not found")
+        if not u["active"]: raise HTTPException(422, "Reactivate this account before sending a link")
         st, err = send_mail(c, dict(u), "reset" if u["pw"] else "invite")
     return {"email_status": st, "email_error": err}
 class Active(BaseModel): active: bool
@@ -283,7 +284,37 @@ def set_active(uid: int, b: Active, req: Request):
     me_ = admin_only(req)
     if uid == me_["id"]: raise HTTPException(422, "You cannot deactivate your own account")
     with db() as c:
-        c.execute("UPDATE users SET active=? WHERE id=?", (int(b.active), uid)); c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        c.execute("BEGIN")
+        try:
+            if not c.execute("SELECT id FROM users WHERE id=? FOR UPDATE", (uid,)).fetchone(): raise HTTPException(404, "Not found")
+            c.execute("UPDATE users SET active=? WHERE id=?", (int(b.active), uid))
+            c.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            c.execute("UPDATE tokens SET used=1 WHERE user_id=? AND used=0", (uid,))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK"); raise
+    return {"ok": True}
+
+@app.delete("/api/users/{uid}")
+def delete_user(uid: int, req: Request):
+    me_ = admin_only(req)
+    if uid == me_["id"]: raise HTTPException(422, "You cannot delete your own account")
+    with db() as c:
+        c.execute("BEGIN")
+        try:
+            target = c.execute("SELECT id,role FROM users WHERE id=? FOR UPDATE", (uid,)).fetchone()
+            if not target: raise HTTPException(404, "Not found")
+            if target["role"] != "employee": raise HTTPException(422, "Only employee accounts can be deleted")
+            # Match the tracker lock used by grid saves before cascading its data.
+            c.execute("SELECT id FROM trackers WHERE owner_id=? FOR UPDATE", (uid,)).fetchone()
+            c.execute("DELETE FROM comments WHERE author_id=?", (uid,))
+            c.execute("DELETE FROM history WHERE author_id=?", (uid,))
+            c.execute("DELETE FROM emails WHERE user_id=?", (uid,))
+            c.execute("DELETE FROM trackers WHERE owner_id=?", (uid,))
+            c.execute("DELETE FROM users WHERE id=?", (uid,))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK"); raise
     return {"ok": True}
 @app.get("/api/emails")
 def emails(req: Request):
@@ -447,14 +478,7 @@ def archive(aid: int, b: Arch, req: Request):
 
 @app.delete("/api/activities/{aid}")
 def delete_activity(aid: int, req: Request):
-    return change_activity_deleted(aid, req, True)
-
-@app.post("/api/activities/{aid}/undelete")
-def undelete_activity(aid: int, req: Request):
-    return change_activity_deleted(aid, req, False)
-
-def change_activity_deleted(aid, req, deleted):
-    """Serialize deletion/restoration with saves; never erase entries."""
+    """Permanently remove an activity and its entries, serialized with saves."""
     u = cur_user(req)
     with db() as c:
         a = c.execute("SELECT * FROM activities WHERE id=?", (aid,)).fetchone()
@@ -464,17 +488,8 @@ def change_activity_deleted(aid, req, deleted):
             get_tracker(c, a["tracker_id"], u, lock=True)
             a = c.execute("SELECT * FROM activities WHERE id=?", (aid,)).fetchone()
             if not a: raise HTTPException(404, "Not found")
-            if bool(a["deleted"]) != deleted:
-                if not deleted:
-                    exceeded = list(c.execute("""SELECT p.iso_week,p.month_key FROM entries e
-                        JOIN activities a ON a.id=e.activity_id JOIN periods p ON p.id=e.period_id
-                        WHERE a.tracker_id=? AND (a.deleted=0 OR a.id=?)
-                        AND p.id IN (SELECT period_id FROM entries WHERE activity_id=?)
-                        GROUP BY p.id HAVING SUM(e.milli)>p.capacity*1000""", (a["tracker_id"], aid, aid)))
-                    if exceeded:
-                        raise HTTPException(422, "Restoration would exceed weekly capacity: " + ", ".join(f"WK{p['iso_week']} ({p['month_key']})" for p in exceeded) + ". Adjust the recorded days before restoring.")
-                c.execute("UPDATE activities SET deleted=? WHERE id=?", (int(deleted), aid))
-                c.execute(HIST, (uuid.uuid4().hex, a["tracker_id"], u["id"], now(), f"Activity '{a['details'] or aid}' " + ("moved to trash (excluded from totals)" if deleted else "restored from trash (included in totals)"), str(a["deleted"]), str(int(deleted)), aid, None))
+            c.execute("DELETE FROM history WHERE activity_id=? AND tracker_id=?", (aid, a["tracker_id"]))
+            c.execute("DELETE FROM activities WHERE id=?", (aid,))
             c.execute("COMMIT")
         except BaseException:
             c.execute("ROLLBACK"); raise
@@ -523,7 +538,7 @@ def save(tid: int, b: Save, req: Request):
                     if f == "progress":
                         if not new.isdigit() or int(new) > 100: raise HTTPException(422, "Progress must be a whole number between 0 and 100")
                         new = int(new)
-                    if f == "status" and new not in ("Completed", "WIP"): raise HTTPException(422, "Status must be Completed or WIP")
+                    if f == "status" and new not in ("Completed", "WIP", "Not started", "Stand-by"): raise HTTPException(422, "Status must be Completed, WIP, Not started or Stand-by")
                     if str(a[f]) != str(ch.get("old", "")): conflicts.append({"key": f"f:{a['id']}:{f}", "current": a[f]}); continue
                     c.execute(f"UPDATE activities SET {f}=? WHERE id=?", (new, a["id"])); log.append((f"'{a['details'] or a['id']}' · {f}", a[f], new, a["id"], None))
                 else: raise HTTPException(422, "Unknown change type")

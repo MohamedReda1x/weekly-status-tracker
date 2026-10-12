@@ -45,7 +45,7 @@ describe('manager and employee journeys', () => {
     expect(await screen.findByLabelText('Employee affiliation')).toBeTruthy(); expect((await screen.findAllByText('Alstom Estimation')).length).toBeGreaterThan(0)
     // an activity added by mistake can be deleted while it has no saved day
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' })); fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-    await screen.findByText('Activity moved to trash. Its days are excluded from totals.'); await waitFor(() => expect(screen.queryAllByLabelText(/^details-/).length).toBe(0))
+    await screen.findByText('Activity permanently deleted. Its days are excluded from totals.'); await waitFor(() => expect(screen.queryAllByLabelText(/^details-/).length).toBe(0))
     fireEvent.click(await screen.findByRole('button', { name: '+ Add activity' }))
     type(await screen.findByLabelText(/^details-/), 'Review SwDS')
     const T = await (await fetch('/api/trackers/' + tid)).json()

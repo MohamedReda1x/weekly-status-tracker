@@ -4,6 +4,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter as L
 
 HEAD, CALC, GREEN, ORANGE = PatternFill("solid", fgColor="DDE6F0"), PatternFill("solid", fgColor="E8EDF3"), PatternFill("solid", fgColor="A9D18E"), PatternFill("solid", fgColor="F4B183")
+STATUS_FILLS = {"Completed": GREEN, "WIP": ORANGE, "Not started": PatternFill("solid", fgColor="E8EEF5"), "Stand-by": PatternFill("solid", fgColor="ECE7F5")}
 thin = Side(style="thin", color="B8C2CE"); BOX = Border(left=thin, right=thin, top=thin, bottom=thin)
 MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 ml = lambda k: f"{MN[int(k[5:])-1]}-{k[2:4]}"
@@ -14,7 +15,8 @@ def build(d):
     ws["A1"] = "Weekly Process Status Report"; ws["A1"].font = Font(bold=True, size=14)
     for r, (k, v) in enumerate([("Employee", d["owner"]["name"]), ("Work package", t["work_package"]), ("Mission start", t["start_date"]), ("Mission end", t["end_date"] or "open"), ("Periods exported", f'{d["range"]["from"]} to {d["range"]["to"]}')], 2):
         ws.cell(r, 1, k).font = Font(bold=True); ws.cell(r, 2, v)
-    ws["D2"], ws["D3"] = "Completed", "WIP"; ws["D2"].fill, ws["D3"].fill = GREEN, ORANGE
+    for row, status in enumerate(STATUS_FILLS, 2):
+        ws.cell(row, 4, status).fill = STATUS_FILLS[status]
     h = 9; left = ["Activity details", "Status", "Affected projects", "Deliverables / Functions", "Alstom Estimation", "Project Progress in %"]; c0 = len(left) + 1
     for i, n in enumerate(left, 1): ws.cell(h, i, n); ws.merge_cells(start_row=h, start_column=i, end_row=h + 2, end_column=i)
     col, start = {}, 0
@@ -29,7 +31,7 @@ def build(d):
     for a in A:
         vals = [a["details"] + (" (archived)" if a["archived"] else ""), a["status"], a["affected"], a["deliverables"], a["estimation"], a["progress"] / 100]
         for i, v in enumerate(vals, 1): ws.cell(r, i, v).border = BOX
-        ws.cell(r, 2).fill = GREEN if a["status"] == "Completed" else ORANGE; ws.cell(r, 6).number_format = "0%"
+        ws.cell(r, 2).fill = STATUS_FILLS.get(a["status"], HEAD); ws.cell(r, 6).number_format = "0%"
         for p in P:
             x = ws.cell(r, col[p["id"]], num(d["entries"].get(a["id"], {}).get(p["id"], 0)) or None); x.number_format = "0.###"; x.border = BOX
         r += 1

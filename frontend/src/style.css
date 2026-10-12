@@ -129,7 +129,20 @@ table.plain td,table.plain th{padding:6px 10px;background:#fff;text-align:left;w
 .affiliation-filters select{display:block;min-width:140px;margin-top:2px;font-size:13px;color:var(--ink)}
 .affiliation-filters>span{font-size:12px;color:var(--mut);align-self:center}
 @media(max-width:800px){.affiliation-banner{grid-template-columns:1fr 1fr}.affiliation-banner>div{border-bottom:1px solid var(--line)}}
-.activity-trash{flex:none;margin-top:6px;padding:7px 10px;background:#fff;border:1px solid var(--line);border-radius:6px}
-.activity-trash summary{cursor:pointer;color:var(--mut);font-size:12px;font-weight:600}
-.activity-trash ul{list-style:none;padding:0;margin:8px 0}
-.activity-trash li{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding:8px 0;font-size:13px}
+
+/* A single employee selector, alongside the filters that constrain it. */
+.employee-selection{min-width:230px;padding-right:16px;border-right:1px solid var(--line)}
+.employee-selection .picker{margin-top:3px;flex-wrap:nowrap}
+.employee-selection .picker select{min-width:150px}
+.employee-selection small{display:block;color:var(--mut);margin-top:4px}
+.affiliation-filters{padding:12px;gap:12px 16px;background:#f8fafc}
+.affiliation-filters label{font-weight:600}
+.affiliation-banner.manager-affiliation{grid-template-columns:repeat(3,minmax(140px,1fr))}
+.account-state{display:block;font-size:12px;font-weight:600;margin-bottom:5px}
+.account-state.enabled{color:#2e7d32}.account-state.disabled{color:var(--bad)}
+button.danger{color:var(--bad)}
+.lg.b-n,.badge.b-n{background:#e8eef5;color:#38516d}
+.lg.b-s,.badge.b-s{background:#ece7f5;color:#635078}
+.gridtab tr.not-started td.s2{background:#e8eef5}
+.gridtab tr.stand-by td.s2{background:#ece7f5}
+@media(max-width:800px){.employee-selection{border-right:0;width:100%}.affiliation-banner.manager-affiliation{grid-template-columns:1fr}}
